@@ -30,6 +30,18 @@ const orderItemSchema = new mongoose.Schema(
       type: Number,
       required: true,
       min: [1, 'Quantity must be at least 1']
+    },
+    liquidGramsConsumed: {
+      type: Number,
+      default: 0
+    },
+    unitCost: {
+      type: Number,
+      default: 0
+    },
+    totalCost: {
+      type: Number,
+      default: 0
     }
   },
   { _id: false }
@@ -73,6 +85,16 @@ const orderSchema = new mongoose.Schema(
       default: 0,
       min: 0
     },
+    shippingFeeCharged: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
+    shippingDiscount: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
     metroPickupFee: {
       type: Number,
       default: 0,
@@ -103,7 +125,7 @@ const orderSchema = new mongoose.Schema(
     },
     orderStatus: {
       type: String,
-      enum: ['pending', 'confirmed', 'processing', 'shipped', 'delivered', 'cancelled'],
+      enum: ['pending', 'confirmed', 'processing', 'shipped', 'delivered', 'cancelled', 'returned_from_shipping'],
       default: 'pending',
       index: true
     },
@@ -159,6 +181,16 @@ const orderSchema = new mongoose.Schema(
       type: Number,
       default: 0
     },
+    actualOutboundShippingCost: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
+    actualReturnShippingCost: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
     verifiedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
@@ -177,9 +209,148 @@ const orderSchema = new mongoose.Schema(
       type: String,
       default: null
     },
+    totalCogs: {
+      type: Number,
+      default: 0
+    },
+    inventoryDeducted: {
+      type: Boolean,
+      default: false
+    },
     processedFirst100: {
       type: Boolean,
       default: false
+    },
+    returnDetails: {
+      isReturned: {
+        type: Boolean,
+        default: false,
+        index: true
+      },
+      returnedAt: {
+        type: Date,
+        default: null
+      },
+      outboundShippingFee: {
+        type: Number,
+        default: 0,
+        min: 0
+      },
+      returnShippingFee: {
+        type: Number,
+        default: 0,
+        min: 0
+      },
+      totalReturnShippingCost: {
+        type: Number,
+        default: 0,
+        min: 0
+      },
+      shippingExpenseRecorded: {
+        type: Boolean,
+        default: false
+      },
+      shippingExpenseId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Expense',
+        default: null
+      },
+      returnReason: {
+        type: String,
+        default: ''
+      },
+      paymentAccountId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'CashAccount',
+        default: null
+      },
+      restockStatus: {
+        type: String,
+        enum: ['not_inspected', 'inspected_restocked', 'inspected_damaged_discarded'],
+        default: 'not_inspected',
+        index: true
+      },
+      restockedAt: {
+        type: Date,
+        default: null
+      },
+      restockedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null
+      },
+      inspectionNotes: {
+        type: String,
+        default: ''
+      },
+      refundStatus: {
+        type: String,
+        enum: ['not_applicable', 'pending_refund', 'refunded'],
+        default: 'not_applicable'
+      },
+      refundAmount: {
+        type: Number,
+        default: 0
+      },
+      refundedAt: {
+        type: Date,
+        default: null
+      },
+      refundCashAccountId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'CashAccount',
+        default: null
+      },
+      refundNotes: {
+        type: String,
+        default: ''
+      }
+    },
+    statusHistory: [
+      {
+        status: {
+          type: String,
+          required: true
+        },
+        changedAt: {
+          type: Date,
+          default: Date.now
+        },
+        changedBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'User',
+          default: null
+        },
+        note: {
+          type: String,
+          default: ''
+        },
+        metadata: {
+          type: mongoose.Schema.Types.Mixed,
+          default: {}
+        }
+      }
+    ],
+    // Marketing Attribution & Ad Tracking
+    attribution: {
+      source: { type: String, default: 'direct', trim: true, index: true },
+      medium: { type: String, default: 'none', trim: true },
+      campaign: { type: String, default: '', trim: true, index: true },
+      content: { type: String, default: '', trim: true },
+      term: { type: String, default: '', trim: true },
+      fbclid: { type: String, default: '', trim: true },
+      ttclid: { type: String, default: '', trim: true },
+      channel: {
+        type: String,
+        enum: ['meta', 'tiktok', 'google', 'organic', 'direct', 'referral', 'other'],
+        default: 'direct',
+        index: true
+      }
+    },
+    metaEventId: {
+      type: String,
+      default: null,
+      index: true
     }
   },
   {

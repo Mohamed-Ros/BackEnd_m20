@@ -3,6 +3,41 @@ const path = require('path');
 
 dotenv.config({ path: path.join(__dirname, '../../.env') });
 
+const cleanEnvString = (val) => {
+  if (val === undefined || val === null) return '';
+  return String(val).trim().replace(/^(['"])(.*)\1$/, '$2').trim();
+};
+
+const normalizeEmailPassword = (rawPass, host, service) => {
+  const cleaned = cleanEnvString(rawPass);
+  if (!cleaned) return '';
+  const isGmail =
+    String(service || '').toLowerCase() === 'gmail' ||
+    String(host || '').toLowerCase().includes('gmail.com');
+  // Gmail App Passwords are displayed in 4-char space-separated groups; strip internal whitespace cleanly
+  if (isGmail) {
+    return cleaned.replace(/\s+/g, '');
+  }
+  return cleaned;
+};
+
+const smtpService = cleanEnvString(process.env.EMAIL_SERVICE || process.env.SMTP_SERVICE);
+const smtpHost = cleanEnvString(process.env.SMTP_HOST || process.env.EMAIL_HOST) || 'smtp.gmail.com';
+const smtpPort = parseInt(cleanEnvString(process.env.SMTP_PORT || process.env.EMAIL_PORT), 10) || 465;
+const rawSecure = cleanEnvString(process.env.SMTP_SECURE || process.env.EMAIL_SECURE).toLowerCase();
+const smtpSecure = rawSecure === 'true' ? true : rawSecure === 'false' ? false : smtpPort === 465;
+const smtpUser = cleanEnvString(process.env.SMTP_USER || process.env.EMAIL_USER);
+const smtpPass = normalizeEmailPassword(
+  process.env.SMTP_PASS || process.env.SMTP_PASSWORD || process.env.EMAIL_PASS,
+  smtpHost,
+  smtpService
+);
+
+const fromEmailRaw = cleanEnvString(process.env.EMAIL_FROM);
+const fromName = cleanEnvString(process.env.EMAIL_FROM_NAME) || 'M20 Maison';
+const fromAddress = cleanEnvString(process.env.EMAIL_FROM_ADDRESS) || smtpUser;
+const resolvedFrom = fromEmailRaw || (fromAddress ? `"${fromName}" <${fromAddress}>` : '');
+
 module.exports = {
   env: process.env.NODE_ENV || 'development',
   port: parseInt(process.env.PORT, 10) || 5000,
@@ -21,5 +56,17 @@ module.exports = {
     baseUrl: process.env.FAWATERK_BASE_URL || 'https://staging.fawaterk.com/api/v2',
     webhookSecret: process.env.FAWATERK_WEBHOOK_SECRET || '',
     redirectUrl: process.env.FAWATERK_REDIRECT_URL || 'http://localhost:3000/checkout/success'
+  },
+  email: {
+    service: smtpService,
+    host: smtpHost,
+    port: smtpPort,
+    secure: smtpSecure,
+    user: smtpUser,
+    pass: smtpPass,
+    from: resolvedFrom,
+    fromName,
+    fromAddress,
+    tlsRejectUnauthorized: cleanEnvString(process.env.SMTP_TLS_REJECT_UNAUTHORIZED).toLowerCase() !== 'false'
   }
 };

@@ -1,11 +1,15 @@
 const express = require('express');
 const router = express.Router();
 const rawMaterialController = require('./rawMaterial.controller');
+const batchController = require('../batches/batch.controller');
 const { protect, restrictTo } = require('../../middleware/auth');
 
 // All inventory operations require admin/staff authorization
 router.use(protect);
 router.use(restrictTo('admin', 'staff'));
+
+// Finished Liquid Inventory
+router.get(['/finished-liquid', '/liquid'], batchController.getLiquidInventory);
 
 // Alerts and Movements
 router.get('/alerts/low-stock', rawMaterialController.getAlerts);

@@ -112,7 +112,7 @@ const productSchema = new mongoose.Schema(
     },
     gender: {
       type: String,
-      enum: ['MEN', 'WOMEN', 'Men', 'Women'],
+      enum: ['MEN', 'WOMEN', 'UNISEX', 'Men', 'Women', 'Unisex'],
       default: 'MEN',
       index: true
     },
@@ -120,6 +120,21 @@ const productSchema = new mongoose.Schema(
       top: [{ type: String, trim: true }],
       heart: [{ type: String, trim: true }],
       base: [{ type: String, trim: true }]
+    },
+    // Perfume Performance & Occasions Attributes
+    longevityHours: {
+      type: Number,
+      default: null,
+      min: 0
+    },
+    sillageHours: {
+      type: Number,
+      default: null,
+      min: 0
+    },
+    occasions: {
+      type: [String],
+      default: []
     },
     // Explicit Role-Based Images
     mainImage: singleImageObjectSchema,
@@ -141,6 +156,37 @@ const productSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Formula',
       default: null
+    },
+    // Finished Liquid Inventory (bulk fragrance prepared and stored in grams)
+    finishedLiquidGrams: {
+      type: Number,
+      default: 0,
+      min: [0, 'Finished liquid stock cannot be negative']
+    },
+    finishedLiquidCostPerGram: {
+      type: Number,
+      default: 0,
+      min: [0, 'Cost per gram cannot be negative']
+    },
+    liquidDensity: {
+      type: Number,
+      default: 0.86,
+      min: [0.1, 'Density must be positive']
+    },
+    lowLiquidThresholdGrams: {
+      type: Number,
+      default: 200,
+      min: 0
+    },
+    totalProducedLiquidGrams: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
+    totalConsumedLiquidGrams: {
+      type: Number,
+      default: 0,
+      min: 0
     },
     featured: {
       type: Boolean,

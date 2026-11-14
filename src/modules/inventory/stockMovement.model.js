@@ -5,7 +5,7 @@ const stockMovementSchema = new mongoose.Schema(
     itemType: {
       type: String,
       required: true,
-      enum: ['RawMaterial', 'ProductVariant'],
+      enum: ['RawMaterial', 'ProductVariant', 'FinishedLiquid'],
       index: true
     },
     rawMaterial: {

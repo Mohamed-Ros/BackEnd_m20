@@ -54,6 +54,9 @@ const createProductSchema = {
     images: Joi.array().items(imageItemSchema).optional(),
     variants: Joi.array().items(variantInputSchema).optional(),
     currentFormula: Joi.string().allow(null, '').optional(),
+    longevityHours: Joi.number().min(0).allow(null, '').optional(),
+    sillageHours: Joi.number().min(0).allow(null, '').optional(),
+    occasions: Joi.array().items(Joi.string()).optional(),
     featured: Joi.boolean().optional(),
     active: Joi.boolean().optional()
   })
@@ -82,6 +85,9 @@ const updateProductSchema = {
     images: Joi.array().items(imageItemSchema).optional(),
     variants: Joi.array().items(variantInputSchema).optional(),
     currentFormula: Joi.string().allow(null, '').optional(),
+    longevityHours: Joi.number().min(0).allow(null, '').optional(),
+    sillageHours: Joi.number().min(0).allow(null, '').optional(),
+    occasions: Joi.array().items(Joi.string()).optional(),
     featured: Joi.boolean().optional(),
     active: Joi.boolean().optional()
   })

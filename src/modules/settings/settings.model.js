@@ -1,14 +1,15 @@
 const mongoose = require('mongoose');
+const { DEFAULT_GOVERNORATE_RATES } = require('../../utils/helpers/governorates');
 
 const settingsSchema = new mongoose.Schema(
   {
     storeName: {
       type: String,
-      default: 'ÉLAN'
+      default: 'M20'
     },
     storeUrl: {
       type: String,
-      default: 'https://elan.online'
+      default: 'https://m20fragrance.com'
     },
     whatsappNumber: {
       type: String,
@@ -18,81 +19,52 @@ const settingsSchema = new mongoose.Schema(
       type: String,
       default: '01132687324'
     },
-    // Shipping configuration
+    announcement: {
+      text: {
+        type: String,
+        default: 'شحن مجاني للطلبات المؤهلة | عينات مجانية مع كل طلب'
+      },
+      active: {
+        type: Boolean,
+        default: true
+      }
+    },
+    socialMedia: {
+      whatsapp: { type: String, default: '201132687324' },
+      phone: { type: String, default: '01132687324' },
+      instagram: { type: String, default: 'https://instagram.com/elan.perfumes' },
+      tiktok: { type: String, default: 'https://tiktok.com/@elan.perfumes' },
+      facebook: { type: String, default: 'https://facebook.com/elan.perfumes.eg' }
+    },
+    heroSlides: [
+      {
+        id: mongoose.Schema.Types.Mixed,
+        image: String,
+        publicId: String,
+        alt: String,
+        link: String,
+        active: { type: Boolean, default: true }
+      }
+    ],
+    // Shipping configuration (Origin: Giza - Strict Whole Integers)
     shipping: {
       freeShippingGovernorates: {
         type: [String],
-        default: ['Cairo', 'القاهرة', 'Giza', 'الجيزة']
+        default: []
       },
       defaultCustomerRate: {
         type: Number,
-        default: 55
+        default: 75
       },
       governorateRates: {
         type: Map,
         of: Number,
-        default: {
-          'Alexandria': 55,
-          'الإسكندرية': 55,
-          'Qalyubia': 50,
-          'القليوبية': 50,
-          'Sharqia': 60,
-          'الشرقية': 60,
-          'Dakahlia': 60,
-          'الدقهلية': 60,
-          'Gharbia': 60,
-          'الغربية': 60,
-          'Monufia': 60,
-          'المنوفية': 60,
-          'Beheira': 65,
-          'البحيرة': 65,
-          'Ismailia': 65,
-          'الإسماعيلية': 65,
-          'Suez': 65,
-          'السويس': 65,
-          'Port Said': 65,
-          'بور سعيد': 65,
-          'Faiyum': 70,
-          'الفيوم': 70,
-          'Beni Suef': 75,
-          'بني سويف': 75,
-          'Minya': 80,
-          'المنيا': 80,
-          'Assiut': 85,
-          'أسيوط': 85,
-          'Sohag': 85,
-          'سوهاج': 85,
-          'Qena': 90,
-          'قنا': 90,
-          'Luxor': 95,
-          'الأقصر': 95,
-          'Aswan': 100,
-          'أسوان': 100,
-          'Red Sea': 110,
-          'البحر الأحمر': 110,
-          'South Sinai': 110,
-          'جنوب سيناء': 110,
-          'North Sinai': 110,
-          'شمال سيناء': 110,
-          'Matrouh': 110,
-          'مطروح': 110,
-          'New Valley': 120,
-          'الوادي الجديد': 120
-        }
+        default: DEFAULT_GOVERNORATE_RATES
       },
       realCostMap: {
         type: Map,
         of: Number,
-        default: {
-          'Cairo': 35,
-          'القاهرة': 35,
-          'Giza': 35,
-          'الجيزة': 35,
-          'Alexandria': 45,
-          'الإسكندرية': 45,
-          'Delta': 50,
-          'Upper Egypt': 70
-        }
+        default: DEFAULT_GOVERNORATE_RATES
       },
       metroPickupCustomerFee: {
         type: Number,
@@ -131,6 +103,45 @@ const settingsSchema = new mongoose.Schema(
         enabled: { type: Boolean, default: true },
         feePercent: { type: Number, default: 0 }
       }
+    },
+    // Automatic Product Cost Defaults
+    costDefaults: {
+      bottleWithCapSprayer: { type: Number, default: 45 },
+      sticker: { type: Number, default: 20 },
+      box: { type: Number, default: 25 },
+      marketingPerBottle: { type: Number, default: 20 },
+      defaultLiquidDensity: { type: Number, default: 0.86 }
+    },
+    // Official M20 Gram-Based Manufacturing Constants
+    manufacturing: {
+      densities: {
+        fragranceOil: { type: Number, default: 0.93 }, // 0.93 g/ml (10ml = 9.3g)
+        alcohol96: { type: Number, default: 0.70 }    // 0.70 g/ml (50ml = 35.0g | 1L = 700g)
+      },
+      bottleSpecs: {
+        '30ml': {
+          netLiquidWeightGrams: { type: Number, default: 25.0 },
+          transferLossGrams: { type: Number, default: 1.0 },
+          totalPrepWeightGrams: { type: Number, default: 26.0 }
+        },
+        '50ml': {
+          netLiquidWeightGrams: { type: Number, default: 43.0 },
+          transferLossGrams: { type: Number, default: 1.0 },
+          totalPrepWeightGrams: { type: Number, default: 44.0 }
+        },
+        '100ml': {
+          netLiquidWeightGrams: { type: Number, default: 78.0 },
+          transferLossGrams: { type: Number, default: 1.0 },
+          totalPrepWeightGrams: { type: Number, default: 79.0 }
+        }
+      }
+    },
+    // Ad Tracking & Pixel Integration (Meta Pixel, Server-side CAPI, TikTok Pixel)
+    tracking: {
+      enableTracking: { type: Boolean, default: true },
+      metaPixelId: { type: String, default: '', trim: true },
+      metaCapiAccessToken: { type: String, default: '', trim: true }, // Backend-only: Never expose to public
+      tiktokPixelId: { type: String, default: '', trim: true }
     }
   },
   {

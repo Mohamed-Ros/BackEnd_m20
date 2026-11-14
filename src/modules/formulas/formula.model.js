@@ -45,6 +45,26 @@ const formulaSchema = new mongoose.Schema(
       required: true,
       default: 1
     },
+    oilPercentage: {
+      type: Number,
+      default: 25,
+      min: [1, 'Oil percentage must be at least 1%'],
+      max: [100, 'Oil percentage cannot exceed 100%']
+    },
+    alcoholPercentage: {
+      type: Number,
+      default: 75,
+      min: [0, 'Alcohol percentage cannot be negative'],
+      max: [99, 'Alcohol percentage cannot exceed 99%']
+    },
+    oilRatio: {
+      type: Number,
+      default: 0.25
+    },
+    alcoholRatio: {
+      type: Number,
+      default: 0.75
+    },
     ingredients: {
       type: [formulaIngredientSchema],
       validate: [
@@ -76,6 +96,19 @@ const formulaSchema = new mongoose.Schema(
     timestamps: true
   }
 );
+
+formulaSchema.virtual('name').get(function () {
+  return this.fragranceName;
+});
+
+formulaSchema.virtual('bottleBreakdowns').get(function () {
+  const { getNetBottleBreakdowns } = require('../../utils/helpers/manufacturing');
+  const ratio = this.oilRatio || (this.oilPercentage ? this.oilPercentage / 100 : 0.25);
+  return getNetBottleBreakdowns(ratio);
+});
+
+formulaSchema.set('toJSON', { virtuals: true });
+formulaSchema.set('toObject', { virtuals: true });
 
 formulaSchema.index({ fragrance: 1, version: 1 }, { unique: true });
 

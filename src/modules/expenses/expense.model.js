@@ -60,6 +60,12 @@ const expenseSchema = new mongoose.Schema(
       default: '',
       trim: true
     },
+    relatedOrderId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Order',
+      default: null,
+      index: true
+    },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',

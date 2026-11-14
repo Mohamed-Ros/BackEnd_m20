@@ -37,9 +37,39 @@ const preview = async (req, res, next) => {
   }
 };
 
+const update = async (req, res, next) => {
+  try {
+    const formula = await formulaService.updateFormula(req.params.id, req.body);
+    return sendResponse(res, 200, 'Formula updated successfully', formula);
+  } catch (err) {
+    next(err);
+  }
+};
+
+const deleteFormula = async (req, res, next) => {
+  try {
+    const result = await formulaService.deleteFormula(req.params.id);
+    return sendResponse(res, 200, result.message || 'Formula deleted successfully', result);
+  } catch (err) {
+    next(err);
+  }
+};
+
+const createVersion = async (req, res, next) => {
+  try {
+    const formula = await formulaService.createFormulaVersion(req.params.id, req.body, req.user?._id);
+    return sendResponse(res, 201, 'Formula version created successfully', formula);
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   getAll,
   getById,
   create,
-  preview
+  preview,
+  update,
+  deleteFormula,
+  createVersion
 };

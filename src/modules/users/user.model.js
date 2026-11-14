@@ -16,16 +16,13 @@ const userSchema = new mongoose.Schema(
     },
     phone: {
       type: String,
-      required: [true, 'Phone number is required'],
-      unique: true,
-      trim: true,
-      index: true
+      required: false,
+      trim: true
     },
     email: {
       type: String,
       trim: true,
-      lowercase: true,
-      default: null
+      lowercase: true
     },
     isEmailVerified: {
       type: Boolean,
@@ -37,6 +34,26 @@ const userSchema = new mongoose.Schema(
       select: false
     },
     emailVerificationExpires: {
+      type: Date,
+      default: null,
+      select: false
+    },
+    emailVerificationAttempts: {
+      type: Number,
+      default: 0,
+      select: false
+    },
+    emailOtpLastSentAt: {
+      type: Date,
+      default: null,
+      select: false
+    },
+    emailOtpSendCount: {
+      type: Number,
+      default: 0,
+      select: false
+    },
+    emailOtpSendWindowStart: {
       type: Date,
       default: null,
       select: false
@@ -79,6 +96,15 @@ const userSchema = new mongoose.Schema(
   {
     timestamps: true
   }
+);
+
+userSchema.index(
+  { phone: 1 },
+  { unique: true, partialFilterExpression: { phone: { $type: 'string' } } }
+);
+userSchema.index(
+  { email: 1 },
+  { unique: true, partialFilterExpression: { email: { $type: 'string' } } }
 );
 
 const User = mongoose.model('User', userSchema);

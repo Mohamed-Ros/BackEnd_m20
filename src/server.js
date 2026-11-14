@@ -1,7 +1,9 @@
+const env = require('./config/env');
 const app = require('./app');
 const connectDB = require('./config/database');
-const env = require('./config/env');
 const logger = require('./utils/helpers/logger');
+const EmailService = require('./utils/email/emailService');
+const { startPaymentProofCleanupJob } = require('./jobs/cleanupPaymentProofs');
 
 // Handle Uncaught Exceptions
 process.on('uncaughtException', (err) => {
@@ -18,8 +20,13 @@ const startServer = async () => {
     // Database Connection Guard: Server will NOT accept requests if DB connection fails
     await connectDB();
 
+    // Start 30-day automated payment proof retention cleanup job
+    startPaymentProofCleanupJob();
+
     const server = app.listen(env.port, () => {
-      logger.info(`[SERVER] ÉLAN Backend server running in ${env.env} mode on port ${env.port}`);
+      logger.info(`[SERVER] M20 Backend server running in ${env.env} mode on port ${env.port}`);
+      // Non-blocking startup SMTP verification so misconfigurations surface immediately
+      EmailService.verifyConnection().catch(() => {});
     });
 
     // Handle Unhandled Promise Rejections

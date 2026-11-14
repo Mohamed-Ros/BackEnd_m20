@@ -1,13 +1,31 @@
 const Settings = require('./settings.model');
+const { DEFAULT_GOVERNORATE_RATES, EGYPT_GOVERNORATES } = require('../../utils/helpers/governorates');
 
 class SettingsService {
   /**
-   * Get or initialize single settings document
+   * Get or initialize single settings document with guaranteed 27 whole-number rates
    */
   static async getSettings() {
     let settings = await Settings.findOne();
     if (!settings) {
       settings = await Settings.create({});
+    } else {
+      // Ensure governorate rates have the 27 governorate tier rates and are integers
+      let needsSave = false;
+      if (!settings.shipping) {
+        settings.shipping = {};
+        needsSave = true;
+      }
+      
+      const currentRates = settings.shipping.governorateRates;
+      if (!currentRates || (currentRates instanceof Map && currentRates.size === 0) || Object.keys(currentRates).length === 0) {
+        settings.shipping.governorateRates = DEFAULT_GOVERNORATE_RATES;
+        needsSave = true;
+      }
+
+      if (needsSave) {
+        await settings.save();
+      }
     }
     return settings;
   }
@@ -22,11 +40,14 @@ class SettingsService {
       storeUrl: settings.storeUrl,
       whatsappNumber: settings.whatsappNumber,
       supportPhone: settings.supportPhone,
+      announcement: settings.announcement,
+      socialMedia: settings.socialMedia,
+      heroSlides: settings.heroSlides,
       shipping: {
-        freeShippingGovernorates: settings.shipping.freeShippingGovernorates,
-        defaultCustomerRate: settings.shipping.defaultCustomerRate,
-        governorateRates: settings.shipping.governorateRates,
-        metroPickupCustomerFee: settings.shipping.metroPickupCustomerFee
+        freeShippingGovernorates: settings.shipping.freeShippingGovernorates || [],
+        defaultCustomerRate: Math.round(Number(settings.shipping.defaultCustomerRate || 75)),
+        governorateRates: settings.shipping.governorateRates || DEFAULT_GOVERNORATE_RATES,
+        metroPickupCustomerFee: Math.round(Number(settings.shipping.metroPickupCustomerFee || 0))
       },
       payments: {
         vodafoneCash: {
@@ -49,6 +70,12 @@ class SettingsService {
           enabled: settings.payments.fawaterk?.enabled,
           feePercent: settings.payments.fawaterk?.feePercent || 0
         }
+      },
+      tracking: {
+        enableTracking: settings.tracking?.enableTracking ?? true,
+        metaPixelId: settings.tracking?.metaPixelId || process.env.META_PIXEL_ID || '',
+        tiktokPixelId: settings.tracking?.tiktokPixelId || process.env.TIKTOK_PIXEL_ID || ''
+        // metaCapiAccessToken is strictly backend-only and NEVER exposed here
       }
     };
   }
@@ -66,24 +93,66 @@ class SettingsService {
       if (data.whatsappNumber) settings.whatsappNumber = data.whatsappNumber;
       if (data.supportPhone) settings.supportPhone = data.supportPhone;
 
+      if (data.announcement) {
+        settings.announcement = {
+          ...settings.announcement?.toObject?.() || {},
+          ...data.announcement
+        };
+      }
+      if (data.socialMedia) {
+        settings.socialMedia = {
+          ...settings.socialMedia?.toObject?.() || {},
+          ...data.socialMedia
+        };
+        if (data.socialMedia.whatsapp) settings.whatsappNumber = data.socialMedia.whatsapp;
+        if (data.socialMedia.phone) settings.supportPhone = data.socialMedia.phone;
+      }
+      if (data.heroSlides) {
+        settings.heroSlides = data.heroSlides;
+      }
+
       if (data.shipping) {
-        if (data.shipping.freeShippingGovernorates) {
-          settings.shipping.freeShippingGovernorates = data.shipping.freeShippingGovernorates;
+        if (data.shipping.freeShippingGovernorates !== undefined) {
+          settings.shipping.freeShippingGovernorates = Array.isArray(data.shipping.freeShippingGovernorates)
+            ? data.shipping.freeShippingGovernorates
+            : [];
         }
         if (data.shipping.defaultCustomerRate !== undefined) {
-          settings.shipping.defaultCustomerRate = Number(data.shipping.defaultCustomerRate);
+          settings.shipping.defaultCustomerRate = Math.round(Number(data.shipping.defaultCustomerRate));
         }
         if (data.shipping.governorateRates) {
-          settings.shipping.governorateRates = data.shipping.governorateRates;
+          const cleanRates = {};
+          const raw = data.shipping.governorateRates;
+          if (raw instanceof Map) {
+            for (const [k, v] of raw.entries()) {
+              cleanRates[k] = Math.round(Number(v));
+            }
+          } else if (typeof raw === 'object') {
+            for (const [k, v] of Object.entries(raw)) {
+              cleanRates[k] = Math.round(Number(v));
+            }
+          }
+          settings.shipping.governorateRates = cleanRates;
         }
         if (data.shipping.realCostMap) {
-          settings.shipping.realCostMap = data.shipping.realCostMap;
+          const cleanReal = {};
+          const raw = data.shipping.realCostMap;
+          if (raw instanceof Map) {
+            for (const [k, v] of raw.entries()) {
+              cleanReal[k] = Math.round(Number(v));
+            }
+          } else if (typeof raw === 'object') {
+            for (const [k, v] of Object.entries(raw)) {
+              cleanReal[k] = Math.round(Number(v));
+            }
+          }
+          settings.shipping.realCostMap = cleanReal;
         }
         if (data.shipping.metroPickupCustomerFee !== undefined) {
-          settings.shipping.metroPickupCustomerFee = Number(data.shipping.metroPickupCustomerFee);
+          settings.shipping.metroPickupCustomerFee = Math.round(Number(data.shipping.metroPickupCustomerFee));
         }
         if (data.shipping.metroPickupRealCost !== undefined) {
-          settings.shipping.metroPickupRealCost = Number(data.shipping.metroPickupRealCost);
+          settings.shipping.metroPickupRealCost = Math.round(Number(data.shipping.metroPickupRealCost));
         }
       }
 
@@ -112,6 +181,13 @@ class SettingsService {
             ...data.payments.fawaterk
           };
         }
+      }
+
+      if (data.tracking) {
+        settings.tracking = {
+          ...(settings.tracking?.toObject?.() || {}),
+          ...data.tracking
+        };
       }
 
       await settings.save();

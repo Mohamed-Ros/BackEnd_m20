@@ -9,6 +9,11 @@ const normalizePhone = (phone) => {
   // Remove non-digit characters except leading plus
   let cleaned = phone.trim().replace(/[\s\-\(\)]/g, '');
 
+  // Convert international 00 prefix to +
+  if (cleaned.startsWith('00') && cleaned.length > 4) {
+    cleaned = `+${cleaned.slice(2)}`;
+  }
+
   // Handle Egyptian local format (01xxxxxxxxx -> +201xxxxxxxxx)
   if (cleaned.startsWith('01') && cleaned.length === 11) {
     cleaned = `+20${cleaned.slice(1)}`;

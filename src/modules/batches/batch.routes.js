@@ -6,6 +6,7 @@ const { protect, restrictTo } = require('../../middleware/auth');
 router.use(protect);
 router.use(restrictTo('admin', 'staff'));
 
+router.get('/liquid/inventory', batchController.getLiquidInventory);
 router.get('/', batchController.getAll);
 router.get('/:id', batchController.getById);
 router.post('/', batchController.create);

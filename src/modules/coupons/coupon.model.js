@@ -12,13 +12,14 @@ const couponSchema = new mongoose.Schema(
     },
     discountType: {
       type: String,
-      enum: ['percentage', 'fixed'],
+      enum: ['percentage', 'fixed', 'FREE_SHIPPING', 'free_shipping'],
       required: true,
       default: 'percentage'
     },
     discountAmount: {
       type: Number,
-      required: true,
+      required: false,
+      default: 0,
       min: 0
     },
     minPurchaseAmount: {
@@ -32,7 +33,7 @@ const couponSchema = new mongoose.Schema(
     },
     expiryDate: {
       type: Date,
-      required: true
+      default: null
     },
     usageLimit: {
       type: Number,

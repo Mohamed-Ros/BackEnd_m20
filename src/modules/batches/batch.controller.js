@@ -37,9 +37,19 @@ const bottle = async (req, res, next) => {
   }
 };
 
+const getLiquidInventory = async (req, res, next) => {
+  try {
+    const liquid = await batchService.getFinishedLiquidInventory();
+    return sendResponse(res, 200, 'Finished liquid inventory retrieved successfully', liquid);
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   getAll,
   getById,
   create,
-  bottle
+  bottle,
+  getLiquidInventory
 };

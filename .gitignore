@@ -2,5 +2,7 @@ node_modules/
 .env
 *.log
 dist/
+backups/
+*.json.bak
 .DS_Store
 Thumbs.db

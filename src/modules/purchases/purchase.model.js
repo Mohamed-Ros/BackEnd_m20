@@ -11,19 +11,31 @@ const purchaseItemSchema = new mongoose.Schema(
       type: String,
       required: true
     },
-    quantityGrams: {
+    quantity: {
       type: Number,
       required: true,
-      min: [0.01, 'Quantity must be positive']
+      min: [0.001, 'Quantity must be positive']
+    },
+    quantityGrams: {
+      type: Number,
+      default: function() { return this.quantity || 0; }
+    },
+    unit: {
+      type: String,
+      default: 'gram'
     },
     totalCost: {
       type: Number,
       required: true,
       min: [0, 'Total cost cannot be negative']
     },
+    unitCost: {
+      type: Number,
+      default: function() { return this.quantity > 0 ? this.totalCost / this.quantity : 0; }
+    },
     costPerGram: {
       type: Number,
-      required: true
+      default: function() { return this.unitCost || 0; }
     },
     previousStock: {
       type: Number,
@@ -69,6 +81,12 @@ const purchaseSchema = new mongoose.Schema(
       required: true,
       min: 0
     },
+    paymentStatus: {
+      type: String,
+      enum: ['paid', 'unpaid'],
+      default: 'paid',
+      index: true
+    },
     paymentAccount: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'CashAccount',
@@ -81,6 +99,10 @@ const purchaseSchema = new mongoose.Schema(
     attachmentUrl: {
       type: String,
       default: null
+    },
+    isInventoryApplied: {
+      type: Boolean,
+      default: true
     },
     notes: {
       type: String,

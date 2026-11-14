@@ -1,4 +1,6 @@
 const OrderService = require('./order.service');
+const SettingsService = require('../settings/settings.service');
+const CouponService = require('../coupons/coupon.service');
 const { sendSuccess } = require('../../utils/responses/responseHandler');
 const { SuccessCodes } = require('../../utils/errors/errorCodes');
 
@@ -9,7 +11,15 @@ class OrderController {
   static async createOrder(req, res, next) {
     try {
       const customerId = req.user ? req.user._id : null;
-      const order = await OrderService.createOrder(customerId, req.body);
+      const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || req.ip;
+      const userAgent = req.headers['user-agent'] || '';
+      const order = await OrderService.createOrder(customerId, {
+        ...req.body,
+        clientIp,
+        userAgent,
+        fbp: req.cookies?._fbp || req.body.fbp,
+        fbc: req.cookies?._fbc || req.body.fbc
+      });
 
       return sendSuccess(
         res,
@@ -18,6 +28,25 @@ class OrderController {
         SuccessCodes.CREATED,
         'OrderController.createOrder',
         order
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Admin: Get marketing attribution and channel analytics
+   */
+  static async getMarketingAnalytics(req, res, next) {
+    try {
+      const analytics = await OrderService.getMarketingAnalytics(req.query);
+      return sendSuccess(
+        res,
+        200,
+        'Marketing analytics retrieved successfully.',
+        SuccessCodes.FETCHED,
+        'OrderController.getMarketingAnalytics',
+        analytics
       );
     } catch (error) {
       next(error);
@@ -46,20 +75,47 @@ class OrderController {
   }
 
   /**
-   * Calculate shipping quote (Public or Customer)
+   * Calculate shipping quote (Public or Customer) - uses dynamic Settings rates
    */
   static async getShippingQuote(req, res, next) {
     try {
-      const { deliveryMethod, governorate, city, subtotal } = req.body;
-      const fees = OrderService.getShippingFee({
+      const { deliveryMethod, governorate, city, subtotal, couponCode } = req.body;
+      const settings = await SettingsService.getSettings();
+      const sub = Math.round(parseFloat(subtotal) || 0);
+      const fees = OrderService.calculateShippingFromSettings(
+        settings,
         deliveryMethod,
         governorate,
-        city,
-        subtotal: parseFloat(subtotal) || 0
-      });
+        sub
+      );
 
-      const sub = parseFloat(subtotal) || 0;
-      const feeToAdd = deliveryMethod === 'metro_pickup' ? fees.metroPickupFee : fees.shippingFee;
+      let shippingDiscount = 0;
+      let isShippingFreePromo = false;
+      let promoDetails = null;
+
+      if (couponCode && typeof couponCode === 'string' && couponCode.trim()) {
+        try {
+          const couponRes = await CouponService.validateCoupon(
+            couponCode.trim(),
+            sub,
+            fees.shippingFee
+          );
+          if (couponRes && (couponRes.discountType === 'FREE_SHIPPING' || couponRes.isShippingDiscount)) {
+            shippingDiscount = fees.shippingFee;
+            isShippingFreePromo = true;
+            promoDetails = {
+              code: couponRes.coupon?.code || couponCode.trim().toUpperCase(),
+              discountType: 'FREE_SHIPPING',
+              shippingDiscount
+            };
+          }
+        } catch (err) {
+          // If coupon is invalid or not a shipping promo, proceed with standard shipping
+        }
+      }
+
+      const effectiveShippingFee = Math.max(0, fees.shippingFee - shippingDiscount);
+      const feeToAdd = deliveryMethod === 'metro_pickup' ? fees.metroPickupFee : effectiveShippingFee;
 
       return sendSuccess(
         res,
@@ -70,7 +126,11 @@ class OrderController {
         {
           subtotal: sub,
           shippingFee: fees.shippingFee,
+          shippingDiscount,
+          effectiveShippingFee,
           metroPickupFee: fees.metroPickupFee,
+          isShippingFreePromo,
+          promoDetails,
           total: sub + feeToAdd
         }
       );
@@ -145,7 +205,7 @@ class OrderController {
    */
   static async updateOrderStatus(req, res, next) {
     try {
-      const order = await OrderService.updateOrderStatus(req.params.id, req.body);
+      const order = await OrderService.updateOrderStatus(req.params.id, req.body, req.user);
 
       return sendSuccess(
         res,
@@ -153,6 +213,46 @@ class OrderController {
         'Order status updated successfully.',
         SuccessCodes.UPDATED,
         'OrderController.updateOrderStatus',
+        order
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Admin: Confirm physical inspection and inventory restock for returned order
+   */
+  static async confirmReturnRestock(req, res, next) {
+    try {
+      const order = await OrderService.confirmReturnRestock(req.params.id, req.body, req.user);
+
+      return sendSuccess(
+        res,
+        200,
+        'Returned products inspection and inventory restock processed successfully.',
+        SuccessCodes.UPDATED,
+        'OrderController.confirmReturnRestock',
+        order
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Admin: Process customer refund for returned paid order
+   */
+  static async processReturnRefund(req, res, next) {
+    try {
+      const order = await OrderService.processReturnRefund(req.params.id, req.body, req.user);
+
+      return sendSuccess(
+        res,
+        200,
+        'Customer refund for returned order processed successfully.',
+        SuccessCodes.UPDATED,
+        'OrderController.processReturnRefund',
         order
       );
     } catch (error) {

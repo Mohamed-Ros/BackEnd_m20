@@ -3,6 +3,13 @@ const Formula = require('../formulas/formula.model');
 const Product = require('../products/product.model');
 const RawMaterial = require('../inventory/rawMaterial.model');
 const StockMovement = require('../inventory/stockMovement.model');
+const Settings = require('../settings/settings.model');
+const { 
+  getBottleSpec, 
+  getNetBottleBreakdowns, 
+  calculateBottleOrderPrep, 
+  calculateCumulativeScale 
+} = require('../../utils/helpers/manufacturing');
 const AppError = require('../../utils/errors/appError');
 
 const getAllBatches = async (query = {}) => {
@@ -45,36 +52,72 @@ const generateBatchNumber = async () => {
  * - Checks stock availability and reports exact shortage amounts.
  * - Computes total batch cost & estimated unit costs for 30ml, 50ml, 100ml.
  */
-const previewBatchCalculation = async (data) => {
-  const { fragranceId, formulaId, finalBatchWeight, concentration } = data;
+const previewBatchCalculation = async (data = {}) => {
+  const formulaId = data.formulaId || data.formula;
+  let fragranceId = data.fragranceId || data.fragrance || data.productId;
 
-  const batchWeight = Number(finalBatchWeight) || 0;
-  const concPercent = Number(concentration) || 25;
-
-  if (!batchWeight || batchWeight <= 0) {
-    throw new AppError('Final batch weight in grams must be greater than 0', 400);
-  }
-
-  const fragrance = await Product.findById(fragranceId);
-  if (!fragrance) {
-    throw new AppError('Fragrance product not found', 404);
-  }
+  // Settings & Custom Specs
+  const settings = await Settings.findOne();
+  const customSpecs = settings?.manufacturing?.bottleSpecs;
+  const alcoholDensity = settings?.manufacturing?.densities?.alcohol96 || 0.70;
 
   let formula = null;
   if (formulaId) {
     formula = await Formula.findById(formulaId);
-  } else {
-    formula = await Formula.findOne({ fragrance: fragrance._id, active: true });
+    if (formula && !fragranceId) fragranceId = formula.fragrance;
   }
-
+  let fragrance = null;
+  if (fragranceId) fragrance = await Product.findById(fragranceId);
+  if (!fragrance && formula && formula.fragrance) fragrance = await Product.findById(formula.fragrance);
+  if (!formula && fragrance) formula = await Formula.findOne({ fragrance: fragrance._id, active: true });
   if (!formula || !Array.isArray(formula.ingredients) || formula.ingredients.length === 0) {
     throw new AppError('Active formula not found for this fragrance', 404);
   }
 
-  const fragranceOilWeight = batchWeight * (concPercent / 100);
-  const alcoholWeight = batchWeight - fragranceOilWeight;
+  // Determine concentration (from payload or formula default or 25%)
+  const concPercent = Number(data.concentration ?? data.concentrationPercent ?? formula.oilPercentage ?? (formula.oilRatio ? formula.oilRatio * 100 : 25));
+  const oilRatio = concPercent / 100;
 
-  const alcoholMaterial = await RawMaterial.findOne({ category: 'alcohol', active: true });
+  // Determine production mode: bottle_count vs bulk_weight
+  const productionMode = data.productionMode === 'bottle_count' || (data.bottleCounts && Object.values(data.bottleCounts).some(v => Number(v) > 0))
+    ? 'bottle_count'
+    : 'bulk_weight';
+
+  let batchWeight = 0;
+  let netUsableWeightGrams = 0;
+  let bottleOrder = null;
+
+  if (productionMode === 'bottle_count') {
+    bottleOrder = calculateBottleOrderPrep(data.bottleCounts || {}, customSpecs);
+    batchWeight = bottleOrder.totalPrepWeightGrams;
+    netUsableWeightGrams = bottleOrder.totalNetLiquidGrams;
+  } else {
+    batchWeight = Number(data.finalBatchWeight ?? data.totalWeightGrams ?? data.batchWeight) || 0;
+    const loss = Number(data.productionLossGrams || 0);
+    netUsableWeightGrams = Math.max(0, batchWeight - loss);
+  }
+
+  if (!batchWeight || batchWeight <= 0) {
+    throw new AppError('Batch prep weight must be greater than 0 grams. Specify bottles or total batch weight.', 400);
+  }
+
+  // Calculate Cumulative Scale Weighing and Ingredients
+  const scale = calculateCumulativeScale({
+    totalPrepWeightGrams: batchWeight,
+    oilRatio,
+    alcoholDensity
+  });
+
+  const fragranceOilWeight = scale.requiredOilGrams;
+  const alcoholWeight = scale.requiredAlcoholGrams;
+
+  let alcoholMaterial = null;
+  if (data.alcoholRawMaterialId) {
+    alcoholMaterial = await RawMaterial.findById(data.alcoholRawMaterialId);
+  }
+  if (!alcoholMaterial) {
+    alcoholMaterial = await RawMaterial.findOne({ category: 'alcohol', active: true });
+  }
   const alcoholCostPerGram = alcoholMaterial ? (alcoholMaterial.costPerGram || 0) : 0;
   const alcoholTotalCost = alcoholWeight * alcoholCostPerGram;
 
@@ -86,9 +129,9 @@ const previewBatchCalculation = async (data) => {
     const raw = await RawMaterial.findById(item.rawMaterial);
     if (!raw) continue;
 
-    const gramsNeeded = fragranceOilWeight * (item.percentage / 100);
+    const gramsNeeded = Number((fragranceOilWeight * (item.percentage / 100)).toFixed(2));
     const costPerGram = raw.costPerGram || 0;
-    const itemTotalCost = gramsNeeded * costPerGram;
+    const itemTotalCost = Number((gramsNeeded * costPerGram).toFixed(2));
     totalOilsCost += itemTotalCost;
 
     const available = raw.currentStock || 0;
@@ -99,7 +142,7 @@ const previewBatchCalculation = async (data) => {
         rawMaterialId: raw._id,
         name: raw.name,
         category: raw.category,
-        requiredGrams: Number(gramsNeeded.toFixed(2)),
+        requiredGrams: gramsNeeded,
         availableGrams: Number(available.toFixed(2)),
         missingGrams: Number((gramsNeeded - available).toFixed(2))
       });
@@ -109,10 +152,10 @@ const previewBatchCalculation = async (data) => {
       rawMaterial: raw._id,
       rawMaterialName: raw.name,
       percentage: item.percentage,
-      gramsNeeded: Number(gramsNeeded.toFixed(2)),
+      gramsNeeded,
       availableGrams: Number(available.toFixed(2)),
       costPerGram: Number(costPerGram.toFixed(4)),
-      totalCost: Number(itemTotalCost.toFixed(2)),
+      totalCost: itemTotalCost,
       isShort
     });
   }
@@ -125,34 +168,38 @@ const previewBatchCalculation = async (data) => {
         rawMaterialId: alcoholMaterial._id,
         name: alcoholMaterial.name,
         category: 'alcohol',
-        requiredGrams: Number(alcoholWeight.toFixed(2)),
+        requiredGrams: alcoholWeight,
         availableGrams: Number(alcoholAvailable.toFixed(2)),
         missingGrams: Number((alcoholWeight - alcoholAvailable).toFixed(2))
       });
     }
   }
 
-  const totalBatchCost = totalOilsCost + alcoholTotalCost;
-  const costPerGram = batchWeight > 0 ? totalBatchCost / batchWeight : 0;
+  const totalBatchCost = Number((totalOilsCost + alcoholTotalCost).toFixed(2));
+  const costPerGram = batchWeight > 0 ? Number((totalBatchCost / batchWeight).toFixed(4)) : 0;
 
-  // Estimated unit costs for 30ml, 50ml, 100ml
-  const sizeEstimations = [
-    { size: '30ml', targetWeight: 28 },
-    { size: '50ml', targetWeight: 45 },
-    { size: '100ml', targetWeight: 90 }
-  ].map(s => {
-    const liquidCost = s.targetWeight * costPerGram;
-    const variant = fragrance.variants?.find(v => v.size.toLowerCase() === s.size.toLowerCase());
-    const pkg = variant?.packagingCosts || { bottle: 18, sticker: 3, box: 15, bag: 5, other: 2 };
+  // Exact net bottle estimations according to M20 specifications
+  const bottleBreakdowns = getNetBottleBreakdowns(oilRatio, customSpecs);
+  const sizeEstimations = ['30ml', '50ml', '100ml'].map(size => {
+    const spec = bottleBreakdowns[size];
+    const liquidCost = Number((spec.totalPrepWeightGrams * costPerGram).toFixed(2));
+    const variant = fragrance.variants?.find(v => v.size.toLowerCase() === size.toLowerCase());
+    const pkg = variant?.packagingCosts || { bottle: 45, sticker: 20, box: 25, bag: 0, other: 0 };
     const pkgCost = (pkg.bottle || 0) + (pkg.sticker || 0) + (pkg.box || 0) + (pkg.bag || 0) + (pkg.other || 0);
+    const totalUnitCost = Number((liquidCost + pkgCost).toFixed(2));
+    const price = variant?.price || 0;
     return {
-      size: s.size,
-      targetWeightGrams: s.targetWeight,
-      liquidCost: Number(liquidCost.toFixed(2)),
+      size,
+      netLiquidWeightGrams: spec.netLiquidWeightGrams,
+      transferLossGrams: spec.transferLossGrams,
+      totalPrepWeightGrams: spec.totalPrepWeightGrams,
+      oilGrams: spec.oilGrams,
+      alcoholGrams: spec.alcoholGrams,
+      liquidCost,
       packagingCost: Number(pkgCost.toFixed(2)),
-      totalUnitCost: Number((liquidCost + pkgCost).toFixed(2)),
-      sellingPrice: variant?.price || 0,
-      estimatedProfitMargin: variant?.price ? Number((((variant.price - (liquidCost + pkgCost)) / variant.price) * 100).toFixed(1)) : 0
+      totalUnitCost,
+      sellingPrice: price,
+      estimatedProfitMargin: price > 0 ? Number((((price - totalUnitCost) / price) * 100).toFixed(1)) : 0
     };
   });
 
@@ -161,44 +208,65 @@ const previewBatchCalculation = async (data) => {
     fragranceName: fragrance.name,
     formulaId: formula._id,
     formulaVersion: formula.version,
+    productionMode,
     batchWeight,
+    netUsableWeightGrams,
     concentration: concPercent,
-    fragranceOilWeight: Number(fragranceOilWeight.toFixed(2)),
-    alcoholWeight: Number(alcoholWeight.toFixed(2)),
+    fragranceOilWeight,
+    alcoholWeight,
+    scaleReadings: {
+      scaleStep1ReadingGrams: scale.scaleStep1ReadingGrams,
+      scaleStep2ReadingGrams: scale.scaleStep2ReadingGrams,
+      alcoholMl: scale.alcoholMl,
+      alcoholLiters: scale.alcoholLiters,
+      alcoholDensity
+    },
+    bottleOrder,
     ingredients: ingredientsPreview,
-    totalOilsCost: Number(totalOilsCost.toFixed(2)),
-    alcoholTotalCost: Number(alcoholTotalCost.toFixed(2)),
-    totalBatchCost: Number(totalBatchCost.toFixed(2)),
-    costPerGram: Number(costPerGram.toFixed(4)),
+    totalOilsCost,
+    alcoholTotalCost,
+    totalBatchCost,
+    costPerGram,
     hasShortage: shortages.length > 0,
     shortages,
-    sizeEstimations
+    sizeEstimations,
+    bottleBreakdowns
   };
 };
 
-const createAndConfirmBatch = async (data, userId) => {
-  const { fragranceId, formulaId, finalBatchWeight, concentration, productionDate, notes } = data;
+const createAndConfirmBatch = async (data = {}, userId) => {
+  const formulaId = data.formulaId || data.formula;
+  let fragranceId = data.fragranceId || data.fragrance || data.productId;
+  const productionDate = data.productionDate;
+  const notes = data.notes;
+  const customBatchCode = data.batchCode || data.batchNumber;
 
-  const batchWeight = Number(finalBatchWeight);
-  const concPercent = Number(concentration);
+  // Settings & Custom Specs
+  const settings = await Settings.findOne();
+  const customSpecs = settings?.manufacturing?.bottleSpecs;
+  const alcoholDensity = settings?.manufacturing?.densities?.alcohol96 || 0.70;
 
-  if (!batchWeight || batchWeight <= 0) {
-    throw new AppError('Final batch weight in grams must be greater than 0', 400);
+  let formula = null;
+  if (formulaId) {
+    formula = await Formula.findById(formulaId);
+    if (formula && !fragranceId) {
+      fragranceId = formula.fragrance;
+    }
   }
 
-  if (!concPercent || concPercent <= 0 || concPercent > 100) {
-    throw new AppError('Concentration must be between 1% and 100%', 400);
+  let fragrance = null;
+  if (fragranceId) {
+    fragrance = await Product.findById(fragranceId);
+  }
+  if (!fragrance && formula && formula.fragrance) {
+    fragrance = await Product.findById(formula.fragrance);
   }
 
-  const fragrance = await Product.findById(fragranceId);
   if (!fragrance) {
     throw new AppError('Fragrance product not found', 404);
   }
 
-  let formula;
-  if (formulaId) {
-    formula = await Formula.findById(formulaId);
-  } else {
+  if (!formula) {
     formula = await Formula.findOne({ fragrance: fragrance._id, active: true });
   }
 
@@ -206,12 +274,54 @@ const createAndConfirmBatch = async (data, userId) => {
     throw new AppError('Active formula not found for this fragrance', 404);
   }
 
-  // 1. Calculate weights in Grams
-  const fragranceOilWeight = batchWeight * (concPercent / 100);
-  const alcoholWeight = batchWeight - fragranceOilWeight;
+  // Determine concentration (from payload or formula default or 25%)
+  const concPercent = Number(data.concentration ?? data.concentrationPercent ?? formula.oilPercentage ?? (formula.oilRatio ? formula.oilRatio * 100 : 25));
+  if (!concPercent || concPercent <= 0 || concPercent > 100) {
+    throw new AppError('Concentration must be between 1% and 100%', 400);
+  }
+  const oilRatio = concPercent / 100;
+
+  // Determine production mode: bottle_count vs bulk_weight
+  const productionMode = data.productionMode === 'bottle_count' || (data.bottleCounts && Object.values(data.bottleCounts).some(v => Number(v) > 0))
+    ? 'bottle_count'
+    : 'bulk_weight';
+
+  let batchWeight = 0;
+  let netUsableWeightGrams = 0;
+  let bottleOrder = null;
+
+  if (productionMode === 'bottle_count') {
+    bottleOrder = calculateBottleOrderPrep(data.bottleCounts || {}, customSpecs);
+    batchWeight = bottleOrder.totalPrepWeightGrams;
+    netUsableWeightGrams = bottleOrder.totalNetLiquidGrams;
+  } else {
+    batchWeight = Number(data.finalBatchWeight ?? data.totalWeightGrams ?? data.batchWeight) || 0;
+    const loss = Number(data.productionLossGrams || 0);
+    netUsableWeightGrams = Math.max(0, batchWeight - loss);
+  }
+
+  if (!batchWeight || batchWeight <= 0) {
+    throw new AppError('Final batch weight in grams must be greater than 0. Specify bottles or total batch weight.', 400);
+  }
+
+  // Cumulative Scale Weighing and Ingredients
+  const scale = calculateCumulativeScale({
+    totalPrepWeightGrams: batchWeight,
+    oilRatio,
+    alcoholDensity
+  });
+
+  const fragranceOilWeight = scale.requiredOilGrams;
+  const alcoholWeight = scale.requiredAlcoholGrams;
 
   // 2. Check and load all raw materials
-  const alcoholMaterial = await RawMaterial.findOne({ category: 'alcohol', active: true });
+  let alcoholMaterial = null;
+  if (data.alcoholRawMaterialId) {
+    alcoholMaterial = await RawMaterial.findById(data.alcoholRawMaterialId);
+  }
+  if (!alcoholMaterial) {
+    alcoholMaterial = await RawMaterial.findOne({ category: 'alcohol', active: true });
+  }
   const alcoholCostPerGram = alcoholMaterial ? (alcoholMaterial.costPerGram || 0) : 0;
   const alcoholTotalCost = alcoholWeight * alcoholCostPerGram;
 
@@ -226,9 +336,9 @@ const createAndConfirmBatch = async (data, userId) => {
       throw new AppError(`Raw material ${item.rawMaterialName} not found`, 404);
     }
 
-    const gramsUsed = fragranceOilWeight * (item.percentage / 100);
+    const gramsUsed = Number((fragranceOilWeight * (item.percentage / 100)).toFixed(3));
     const costPerGram = raw.costPerGram || 0;
-    const totalCost = gramsUsed * costPerGram;
+    const totalCost = Number((gramsUsed * costPerGram).toFixed(2));
     totalOilsCost += totalCost;
 
     const availableStock = raw.currentStock || 0;
@@ -246,15 +356,15 @@ const createAndConfirmBatch = async (data, userId) => {
       rawMaterial: raw._id,
       rawMaterialName: raw.name,
       percentage: item.percentage,
-      gramsUsed: Number(gramsUsed.toFixed(3)),
+      gramsUsed,
       costPerGramAtTime: costPerGram,
-      totalCost: Number(totalCost.toFixed(2))
+      totalCost
     });
 
     materialsToDeduct.push({
       material: raw,
-      gramsUsed: gramsUsed,
-      costPerGram: costPerGram
+      gramsUsed,
+      costPerGram
     });
   }
 
@@ -281,9 +391,17 @@ const createAndConfirmBatch = async (data, userId) => {
   }
 
   // 3. All materials available -> Perform Atomic Deductions & StockMovements
-  const batchNumber = await generateBatchNumber();
-  const totalBatchCost = totalOilsCost + alcoholTotalCost;
-  const costPerGram = totalBatchCost / batchWeight;
+  let batchNumber = customBatchCode ? customBatchCode.trim() : null;
+  if (batchNumber) {
+    const existing = await ProductionBatch.findOne({ batchNumber });
+    if (existing) {
+      batchNumber = await generateBatchNumber();
+    }
+  } else {
+    batchNumber = await generateBatchNumber();
+  }
+  const totalBatchCost = Number((totalOilsCost + alcoholTotalCost).toFixed(2));
+  const costPerGram = Number((totalBatchCost / batchWeight).toFixed(4));
 
   // Deduct each fragrance oil
   for (const item of materialsToDeduct) {
@@ -303,7 +421,7 @@ const createAndConfirmBatch = async (data, userId) => {
       quantityAfter: mat.currentStock,
       unit: 'gram',
       unitCost: item.costPerGram,
-      totalValue: item.gramsUsed * item.costPerGram,
+      totalValue: Number((item.gramsUsed * item.costPerGram).toFixed(2)),
       reason: `Consumed in batch ${batchNumber} (${fragrance.name})`,
       referenceId: batchNumber,
       referenceType: 'ProductionBatch',
@@ -328,7 +446,7 @@ const createAndConfirmBatch = async (data, userId) => {
       quantityAfter: alcoholMaterial.currentStock,
       unit: 'gram',
       unitCost: alcoholCostPerGram,
-      totalValue: alcoholWeight * alcoholCostPerGram,
+      totalValue: Number((alcoholWeight * alcoholCostPerGram).toFixed(2)),
       reason: `Alcohol consumed in batch ${batchNumber} (${fragrance.name})`,
       referenceId: batchNumber,
       referenceType: 'ProductionBatch',
@@ -337,6 +455,7 @@ const createAndConfirmBatch = async (data, userId) => {
   }
 
   // 4. Save Confirmed Batch with frozen historical snapshots
+  const lossGrams = Number(Math.max(0, batchWeight - netUsableWeightGrams).toFixed(2));
   const batch = await ProductionBatch.create({
     batchNumber,
     fragrance: fragrance._id,
@@ -344,19 +463,63 @@ const createAndConfirmBatch = async (data, userId) => {
     formula: formula._id,
     formulaVersion: formula.version,
     finalBatchWeight: batchWeight,
+    productionMode,
+    bottleCounts: data.bottleCounts || {},
+    netUsableWeightGrams,
+    scaleReadings: {
+      scaleStep1ReadingGrams: scale.scaleStep1ReadingGrams,
+      scaleStep2ReadingGrams: scale.scaleStep2ReadingGrams,
+      alcoholMl: scale.alcoholMl,
+      alcoholLiters: scale.alcoholLiters
+    },
     concentration: concPercent,
-    fragranceOilWeight: Number(fragranceOilWeight.toFixed(3)),
-    alcoholWeight: Number(alcoholWeight.toFixed(3)),
+    fragranceOilWeight,
+    alcoholWeight,
     alcoholRawMaterial: alcoholMaterial ? alcoholMaterial._id : null,
     alcoholCostPerGramAtTime: alcoholCostPerGram,
     alcoholTotalCost: Number(alcoholTotalCost.toFixed(2)),
     ingredientSnapshots,
-    totalOilsCost: Number(totalOilsCost.toFixed(2)),
-    totalBatchCost: Number(totalBatchCost.toFixed(2)),
-    costPerGram: Number(costPerGram.toFixed(4)),
+    totalOilsCost,
+    totalBatchCost,
+    costPerGram,
     status: 'confirmed',
+    productionLossGrams: lossGrams,
     productionDate: productionDate || new Date(),
     notes: notes || '',
+    createdBy: userId
+  });
+
+  // 5. Update Finished Liquid Inventory on Product model with net usable liquid weight
+  const liquidToAdd = netUsableWeightGrams > 0 ? netUsableWeightGrams : batchWeight;
+  const prevLiquidGrams = fragrance.finishedLiquidGrams || 0;
+  const prevLiquidCost = fragrance.finishedLiquidCostPerGram || 0;
+  const newLiquidGrams = prevLiquidGrams + liquidToAdd;
+  let newWeightedLiquidCost = costPerGram;
+  if (newLiquidGrams > 0) {
+    newWeightedLiquidCost = Number((((prevLiquidGrams * prevLiquidCost) + totalBatchCost) / newLiquidGrams).toFixed(4));
+  }
+
+  fragrance.finishedLiquidGrams = newLiquidGrams;
+  fragrance.finishedLiquidCostPerGram = newWeightedLiquidCost;
+  fragrance.totalProducedLiquidGrams = (fragrance.totalProducedLiquidGrams || 0) + liquidToAdd;
+  if (!fragrance.currentFormula) fragrance.currentFormula = formula._id;
+  await fragrance.save();
+
+  // 6. Record StockMovement for Finished Liquid
+  await StockMovement.create({
+    itemType: 'FinishedLiquid',
+    product: fragrance._id,
+    itemName: `${fragrance.name} (Finished Liquid)`,
+    movementType: 'FINISHED_PRODUCT_CREATED',
+    quantityBefore: prevLiquidGrams,
+    quantityChange: liquidToAdd,
+    quantityAfter: newLiquidGrams,
+    unit: 'gram',
+    unitCost: costPerGram,
+    totalValue: totalBatchCost,
+    reason: `New production of ${liquidToAdd}g net finished liquid from batch ${batchNumber}`,
+    referenceId: batchNumber,
+    referenceType: 'ProductionBatch',
     createdBy: userId
   });
 
@@ -403,7 +566,8 @@ const convertBatchToFinishedProducts = async (batchId, payload, userId) => {
     const qty = Number(item.quantityProduced || item.unitsBottled) || 0;
     const damaged = Number(item.damagedCount) || 0;
     const testers = Number(item.testerCount) || 0;
-    const targetWeight = Number(item.targetWeightGrams || item.targetWeightGramsPerUnit) || (parseInt(item.size) || 50);
+    const spec = getBottleSpec(item.size);
+    const targetWeight = Number(item.targetWeightGrams || item.targetWeightGramsPerUnit) || spec.netLiquidWeightGrams;
 
     const totalUnits = qty + damaged + testers;
     const liquidUsed = totalUnits * targetWeight;
@@ -598,6 +762,35 @@ const cancelBatch = async (batchId, reason = '', userId) => {
         });
       }
     }
+
+    // Revert finished liquid from product
+    if (batch.fragrance) {
+      const prod = await Product.findById(batch.fragrance);
+      if (prod) {
+        const liquidToRemove = batch.netUsableWeightGrams || batch.finalBatchWeight || 0;
+        const prevLiquid = prod.finishedLiquidGrams || 0;
+        prod.finishedLiquidGrams = Math.max(0, prevLiquid - liquidToRemove);
+        prod.totalProducedLiquidGrams = Math.max(0, (prod.totalProducedLiquidGrams || 0) - liquidToRemove);
+        await prod.save();
+
+        await StockMovement.create({
+          itemType: 'FinishedLiquid',
+          product: prod._id,
+          itemName: `${prod.name} (Finished Liquid)`,
+          movementType: 'MANUAL_ADJUSTMENT',
+          quantityBefore: prevLiquid,
+          quantityChange: -liquidToRemove,
+          quantityAfter: prod.finishedLiquidGrams,
+          unit: 'gram',
+          unitCost: batch.costPerGram || 0,
+          totalValue: Number((liquidToRemove * (batch.costPerGram || 0)).toFixed(2)),
+          reason: `Reversal of finished liquid from cancelled batch ${batch.batchNumber}: ${reason}`,
+          referenceId: batch.batchNumber,
+          referenceType: 'ProductionBatch',
+          createdBy: userId
+        });
+      }
+    }
   }
 
   batch.status = 'cancelled';
@@ -607,11 +800,68 @@ const cancelBatch = async (batchId, reason = '', userId) => {
   return batch;
 };
 
+const getFinishedLiquidInventory = async () => {
+  const products = await Product.find({ active: true })
+    .select('name slug gender fragranceFamily finishedLiquidGrams finishedLiquidCostPerGram liquidDensity lowLiquidThresholdGrams totalProducedLiquidGrams totalConsumedLiquidGrams variants currentFormula');
+
+  const result = await Promise.all(products.map(async (prod) => {
+    const density = prod.liquidDensity || 0.86;
+    const availableGrams = Number((prod.finishedLiquidGrams || 0).toFixed(2));
+    const costPerGram = Number((prod.finishedLiquidCostPerGram || 0).toFixed(4));
+    const totalValue = Number((availableGrams * costPerGram).toFixed(2));
+    const lowThreshold = prod.lowLiquidThresholdGrams || 200;
+    const isLowStock = availableGrams <= lowThreshold;
+
+    const spec30 = getBottleSpec('30ml');
+    const spec50 = getBottleSpec('50ml');
+    const spec100 = getBottleSpec('100ml');
+
+    const approx30ml = Math.floor(availableGrams / spec30.totalPrepWeightGrams);
+    const approx50ml = Math.floor(availableGrams / spec50.totalPrepWeightGrams);
+    const approx100ml = Math.floor(availableGrams / spec100.totalPrepWeightGrams);
+
+    const [activeFormula, recentBatches] = await Promise.all([
+      Formula.findOne({ fragrance: prod._id, active: true }),
+      ProductionBatch.find({ fragrance: prod._id, status: 'confirmed' })
+        .sort({ productionDate: -1, createdAt: -1 })
+        .limit(5)
+        .select('batchNumber finalBatchWeight concentration totalBatchCost costPerGram productionDate createdAt')
+    ]);
+
+    return {
+      fragranceId: prod._id,
+      name: prod.name,
+      slug: prod.slug,
+      gender: prod.gender,
+      fragranceFamily: prod.fragranceFamily,
+      finishedLiquidGrams: availableGrams,
+      finishedLiquidCostPerGram: costPerGram,
+      liquidDensity: density,
+      lowLiquidThresholdGrams: lowThreshold,
+      isLowStock,
+      totalValue,
+      approxBottles: {
+        '30ml': approx30ml,
+        '50ml': approx50ml,
+        '100ml': approx100ml
+      },
+      hasActiveFormula: !!activeFormula,
+      formulaId: activeFormula?._id || null,
+      formulaName: activeFormula?.name || null,
+      defaultConcentration: activeFormula?.defaultConcentration || 20,
+      recentBatches
+    };
+  }));
+
+  return result;
+};
+
 module.exports = {
   getAllBatches,
   getBatchById,
   previewBatchCalculation,
   createAndConfirmBatch,
   convertBatchToFinishedProducts,
-  cancelBatch
+  cancelBatch,
+  getFinishedLiquidInventory
 };

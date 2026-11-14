@@ -14,7 +14,7 @@ class FawaterkService {
    * @returns {Object} { invoice_id, invoice_key, url }
    */
   static async createInvoice(orderId) {
-    const filter = orderId.startsWith('ELAN-') ? { orderNumber: orderId } : { _id: orderId };
+    const filter = (orderId.startsWith('M20-') || orderId.startsWith('ELAN-')) ? { orderNumber: orderId } : { _id: orderId };
     const order = await Order.findOne(filter);
 
     if (!order) {

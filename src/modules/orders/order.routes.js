@@ -1,7 +1,13 @@
 const express = require('express');
 const OrderController = require('./order.controller');
 const validate = require('../../middleware/validation');
-const { createOrderSchema, shippingQuoteSchema, updateOrderStatusSchema } = require('./order.validation');
+const { 
+  createOrderSchema, 
+  shippingQuoteSchema, 
+  updateOrderStatusSchema,
+  confirmReturnRestockSchema,
+  processReturnRefundSchema 
+} = require('./order.validation');
 const { protect, optionalProtect, restrictTo } = require('../../middleware/auth');
 
 const router = express.Router();
@@ -20,10 +26,13 @@ router.get('/my-orders', protect, OrderController.getMyOrders);
 router.get('/:id', protect, OrderController.getOrderById);
 
 // Admin routes
+router.get('/marketing-analytics', protect, restrictTo('admin'), OrderController.getMarketingAnalytics);
 router.get('/', protect, restrictTo('admin'), OrderController.getAllOrders);
 router.post('/admin/create', protect, restrictTo('admin'), OrderController.createAdminOrder);
 router.post('/admin', protect, restrictTo('admin'), OrderController.createAdminOrder);
 router.patch('/:id/status', protect, restrictTo('admin'), validate(updateOrderStatusSchema, 'Order.UpdateStatus'), OrderController.updateOrderStatus);
+router.post('/:id/confirm-return-restock', protect, restrictTo('admin'), validate(confirmReturnRestockSchema, 'Order.ConfirmRestock'), OrderController.confirmReturnRestock);
+router.post('/:id/process-return-refund', protect, restrictTo('admin'), validate(processReturnRefundSchema, 'Order.ProcessRefund'), OrderController.processReturnRefund);
 router.put('/:id/verify-payment', protect, restrictTo('admin'), OrderController.verifyPayment);
 
 module.exports = router;

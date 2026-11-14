@@ -3,7 +3,7 @@ const AppError = require('../../utils/errors/appError');
 const { ErrorCodes } = require('../../utils/errors/errorCodes');
 
 const generateSlug = (text) => {
-  if (!text) return `elan-perfume-${Date.now()}`;
+  if (!text) return `m20-perfume-${Date.now()}`;
   return text
     .toString()
     .toLowerCase()
@@ -22,7 +22,7 @@ class ProductService {
   /**
    * Helper: Normalize variants to ensure 30ml, 50ml, and 100ml are present with valid prices and SKUs
    */
-  static normalizeVariants(variants = [], productSlug = 'elan-fragrance') {
+  static normalizeVariants(variants = [], productSlug = 'm20-fragrance') {
     const sizeMap = {};
     if (Array.isArray(variants)) {
       variants.forEach((v) => {
@@ -41,7 +41,7 @@ class ProductService {
         : (existing.oldPrice !== undefined && existing.oldPrice !== null && existing.oldPrice !== '' ? Number(existing.oldPrice) : null);
 
       const cleanSlug = productSlug.toUpperCase().replace(/[^A-Z0-9]/g, '-').replace(/-+/g, '-');
-      const sku = existing.SKU ? existing.SKU.toUpperCase() : `ELN-${cleanSlug.slice(0, 10)}-${size.toUpperCase()}`;
+      const sku = existing.SKU ? existing.SKU.toUpperCase() : `M20-${cleanSlug.slice(0, 10)}-${size.toUpperCase()}`;
 
       return {
         size,
@@ -63,8 +63,8 @@ class ProductService {
    * Create new product with variants
    */
   static async createProduct(productData) {
-    let baseSlug = generateSlug(productData.name || 'elan-perfume');
-    if (!baseSlug) baseSlug = `elan-${Date.now()}`;
+    let baseSlug = generateSlug(productData.name || 'm20-perfume');
+    if (!baseSlug) baseSlug = `m20-${Date.now()}`;
 
     // Ensure unique slug
     let slug = baseSlug;
@@ -191,7 +191,11 @@ class ProductService {
    * Get product by slug
    */
   static async getProductBySlug(slug) {
-    const product = await Product.findOne({ slug: slug.toLowerCase() });
+    const s = slug.toLowerCase();
+    const query = [s];
+    if (s === 'elan-signature-noir') query.push('m20-signature-noir');
+    if (s === 'm20-signature-noir') query.push('elan-signature-noir');
+    const product = await Product.findOne({ slug: { $in: query } });
     if (!product) {
       throw new AppError(`Product not found with slug: ${slug}`, 404, ErrorCodes.PRODUCT_NOT_FOUND, 'ProductService.getProductBySlug');
     }
@@ -285,6 +289,16 @@ class ProductService {
       product.packagingImage = updateData.packagingImage;
     }
 
+    if (updateData.longevityHours !== undefined) {
+      product.longevityHours = updateData.longevityHours !== null && updateData.longevityHours !== '' ? Number(updateData.longevityHours) : null;
+    }
+    if (updateData.sillageHours !== undefined) {
+      product.sillageHours = updateData.sillageHours !== null && updateData.sillageHours !== '' ? Number(updateData.sillageHours) : null;
+    }
+    if (updateData.occasions !== undefined) {
+      product.occasions = Array.isArray(updateData.occasions) ? updateData.occasions : [];
+    }
+
     Object.assign(product, updateData);
     await product.save();
     return product;
@@ -298,6 +312,24 @@ class ProductService {
     if (!product) {
       throw new AppError('Product not found.', 404, ErrorCodes.PRODUCT_NOT_FOUND, 'ProductService.deleteProduct');
     }
+
+    // Best-effort cleanup of linked Cloudinary image assets
+    try {
+      const CloudinaryService = require('../../cloudinary/cloudinary.service');
+      const publicIds = new Set(
+        [
+          product.mainImage?.publicId,
+          product.hoverImage?.publicId,
+          product.pyramidImage?.publicId,
+          product.packagingImage?.publicId,
+          ...(Array.isArray(product.images) ? product.images.map((img) => img?.publicId) : [])
+        ].filter((pid) => typeof pid === 'string' && pid.trim().length > 0)
+      );
+      await Promise.allSettled([...publicIds].map((pid) => CloudinaryService.deleteImage(pid)));
+    } catch (err) {
+      console.warn('[ProductService.deleteProduct] Cloudinary cleanup skipped:', err.message);
+    }
+
     return product;
   }
 

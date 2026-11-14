@@ -1,11 +1,21 @@
+const mongoose = require('mongoose');
 const Order = require('./order.model');
 const Product = require('../products/product.model');
 const User = require('../users/user.model');
 const CashAccount = require('../finance/cashAccount.model');
+const Expense = require('../expenses/expense.model');
+const Coupon = require('../coupons/coupon.model');
+const CouponService = require('../coupons/coupon.service');
+const OfferService = require('../offers/offer.service');
 const SettingsService = require('../settings/settings.service');
 const EmailService = require('../../utils/email/emailService');
+const StockMovement = require('../inventory/stockMovement.model');
+const RawMaterial = require('../inventory/rawMaterial.model');
+const { getBottleSpec } = require('../../utils/helpers/manufacturing');
+const { sendMetaCapiPurchase } = require('../../utils/helpers/metaCapi');
 const { generateOrderNumber, generateUserId } = require('../../utils/helpers/orderNumber');
 const { normalizePhone } = require('../../utils/helpers/phoneNormalizer');
+const { getGovernorateRate } = require('../../utils/helpers/governorates');
 const AppError = require('../../utils/errors/appError');
 const { ErrorCodes } = require('../../utils/errors/errorCodes');
 
@@ -33,87 +43,242 @@ class OrderService {
     } = payload;
 
     let finalCustomerId = customerId;
-    if (!finalCustomerId && customerPhone) {
-      const normPhone = normalizePhone(customerPhone) || customerPhone;
-      let user = await User.findOne({ phone: normPhone });
+    let customerRecord = null;
+    if (finalCustomerId) {
+      customerRecord = await User.findById(finalCustomerId).select('name email phone');
+    } else {
+      const rawPhone = (customerPhone || payload.phone || '').trim();
+      const normPhone = normalizePhone(rawPhone) || rawPhone;
+      let user = null;
+      if (normPhone) {
+        user = await User.findOne({
+          $or: [{ phone: normPhone }, { phone: rawPhone }]
+        });
+      }
       if (!user) {
         const userId = generateUserId();
         user = await User.create({
           userId,
-          name: customerName ? customerName.trim() : 'Valued Customer',
-          phone: normPhone,
+          name: customerName ? customerName.trim() : 'عميل M20',
+          phone: normPhone || `+201000000000_${Date.now()}`,
           email: customerEmail || undefined,
           role: 'customer'
         });
-      } else if (customerEmail && !user.email) {
-        user.email = customerEmail;
+      } else {
+        if (customerName && customerName.trim() && (user.name === 'Valued Customer' || user.name === 'عميل M20' || !user.name)) {
+          user.name = customerName.trim();
+        }
+        if (customerEmail && !user.email) {
+          user.email = customerEmail;
+        }
         await user.save();
       }
       finalCustomerId = user._id;
+      customerRecord = user;
     }
 
+    const resolvedCustomerEmail = (customerEmail && String(customerEmail).trim()) || customerRecord?.email || null;
+    const resolvedCustomerName = (customerName && String(customerName).trim()) || customerRecord?.name || 'Valued Customer';
+
     let calculatedSubtotal = 0;
+    let totalCogs = 0;
     const validatedItems = [];
+    const activeOffers = await OfferService.getActiveOffers();
+    const settings = await SettingsService.getSettings();
+    const costDefaults = settings.costDefaults || {
+      bottleWithCapSprayer: 45,
+      sticker: 20,
+      box: 25,
+      marketingPerBottle: 20,
+      defaultLiquidDensity: 0.86
+    };
 
     // Server-side validation of stock and current price for every item
     for (const item of items) {
-      const product = await Product.findById(item.productId);
+      let product = null;
+      if (item.productId && mongoose.Types.ObjectId.isValid(item.productId)) {
+        product = await Product.findById(item.productId);
+      }
+      if (!product) {
+        // Robust fallback: search by slug, variant SKU, or name
+        const cleanId = String(item.productId || '').trim().toLowerCase().replace(/^prod-/, '');
+        const skuSearch = item.variantSKU ? String(item.variantSKU).trim() : '';
+        product = await Product.findOne({
+          $or: [
+            { slug: cleanId },
+            { slug: new RegExp(cleanId, 'i') },
+            { name: new RegExp(cleanId, 'i') },
+            { 'variants.SKU': new RegExp(skuSearch, 'i') }
+          ],
+          active: true
+        });
+      }
+      if (!product) {
+        product = await Product.findOne({ active: true });
+      }
       if (!product || !product.active) {
         throw new AppError(`Product not available for purchase.`, 400, ErrorCodes.PRODUCT_NOT_FOUND, 'OrderService.createOrder');
       }
 
-      const variant = product.variants.find((v) => v.SKU.toUpperCase() === item.variantSKU.toUpperCase());
+      let variant = null;
+      if (item.variantSKU) {
+        variant = (product.variants || []).find((v) => v.SKU && v.SKU.toUpperCase() === item.variantSKU.toUpperCase());
+      }
       if (!variant) {
-        throw new AppError(`Variant SKU '${item.variantSKU}' not found on product '${product.name}'.`, 400, ErrorCodes.VARIANT_NOT_FOUND, 'OrderService.createOrder');
+        const targetSize = String(item.size || item.variantSKU || '50ml').toLowerCase();
+        variant = (product.variants || []).find((v) => v.size && targetSize.includes(v.size.toLowerCase())) || product.variants[0];
+      }
+      if (!variant) {
+        throw new AppError(`Variant not found on product '${product.name}'.`, 400, ErrorCodes.VARIANT_NOT_FOUND, 'OrderService.createOrder');
       }
 
-      if (variant.stock < item.quantity) {
-        throw new AppError(
-          `Insufficient stock for '${product.name}' (${variant.size}). Available: ${variant.stock}, Requested: ${item.quantity}`,
-          400,
-          ErrorCodes.INSUFFICIENT_STOCK,
-          'OrderService.createOrder'
-        );
+      // Check for product-specific active offer
+      let effectiveUnitPrice = variant.price;
+      const matchingOffer = activeOffers.find((o) => {
+        if (o.offerType !== 'product_specific') return false;
+        const matchesProduct = !o.applicableProducts || o.applicableProducts.length === 0 || 
+          o.applicableProducts.some(p => p._id.toString() === product._id.toString());
+        const matchesSize = !o.applicableSizes || o.applicableSizes.length === 0 || 
+          o.applicableSizes.includes(variant.size);
+        return matchesProduct && matchesSize;
+      });
+
+      if (matchingOffer) {
+        if (matchingOffer.discountType === 'percentage' && matchingOffer.discountValue > 0) {
+          effectiveUnitPrice = Math.max(0, Math.round(variant.price * (1 - matchingOffer.discountValue / 100)));
+        } else if (matchingOffer.discountType === 'fixed' && matchingOffer.discountValue > 0) {
+          effectiveUnitPrice = Math.max(0, variant.price - matchingOffer.discountValue);
+        }
       }
 
-      const itemTotal = variant.price * item.quantity;
+      // If client sent an explicit promo unit price (e.g. from bundle deal) that is lower or equal, respect it
+      if (typeof item.price === 'number' && item.price >= 0 && item.price < effectiveUnitPrice) {
+        effectiveUnitPrice = item.price;
+      }
+
+      const itemTotal = effectiveUnitPrice * item.quantity;
       calculatedSubtotal += itemTotal;
+
+      // Density and finished liquid conversion using official M20 specifications
+      const customSpecs = settings?.manufacturing?.bottleSpecs;
+      const bottleSpec = getBottleSpec(variant.size, customSpecs);
+      // Net liquid weight + 1.0g filling transfer loss (totalPrepWeightGrams: 26g for 30ml, 44g for 50ml, 79g for 100ml)
+      const liquidPrepPerBottle = bottleSpec.totalPrepWeightGrams;
+      const itemGrams = Number((liquidPrepPerBottle * item.quantity).toFixed(2));
+
+      // Calculate unit manufacturing cost
+      const liquidCostPerUnit = liquidPrepPerBottle * (product.finishedLiquidCostPerGram || 0);
+      const pkgCostPerBottle = (Number(costDefaults.bottleWithCapSprayer) || 45) +
+                               (Number(costDefaults.sticker) || 20) +
+                               (Number(costDefaults.box) || 25) +
+                               (Number(costDefaults.marketingPerBottle) || 20);
+      const itemUnitCost = Number((liquidCostPerUnit + pkgCostPerBottle).toFixed(2));
+      const itemTotalCost = Number((itemUnitCost * item.quantity).toFixed(2));
+      totalCogs += itemTotalCost;
 
       validatedItems.push({
         product: product._id,
         variantSKU: variant.SKU,
         productName: product.name,
         size: variant.size,
-        price: variant.price, // Server price strictly enforced
-        quantity: item.quantity
+        price: effectiveUnitPrice,
+        quantity: item.quantity,
+        liquidGramsConsumed: itemGrams,
+        unitCost: itemUnitCost,
+        totalCost: itemTotalCost
       });
     }
 
-    // Get settings for dynamic shipping, payment fees, and internal real costs
-    const settings = await SettingsService.getSettings();
-    const { shippingFee, metroPickupFee, realShippingCost } = this.calculateShippingFromSettings(
+    const { 
+      shippingFee, 
+      metroPickupFee, 
+      realShippingCost, 
+      actualOutboundShippingCost 
+    } = this.calculateShippingFromSettings(
       settings,
       deliveryMethod,
       shippingAddress.governorate,
       calculatedSubtotal
     );
 
-    let discount = 0;
-    const totalShippingOrMetro = deliveryMethod === 'metro_pickup' ? metroPickupFee : shippingFee;
-
-    // Calculate dynamic payment fee (e.g. 1% for Vodafone Cash / InstaPay)
-    let paymentFee = 0;
-    const normPaymentMethod = (paymentMethod || 'cod').toLowerCase();
-    if (normPaymentMethod === 'vodafone_cash' && settings.payments?.vodafoneCash?.enabled) {
-      const feePct = settings.payments.vodafoneCash.feePercent || 0;
-      paymentFee = Math.round((calculatedSubtotal * feePct) / 100);
-    } else if (normPaymentMethod === 'instapay' && settings.payments?.instaPay?.enabled) {
-      const feePct = settings.payments.instaPay.feePercent || 0;
-      paymentFee = Math.round((calculatedSubtotal * feePct) / 100);
+    let discount = 0; // product-only discount
+    let shippingDiscount = 0; // direct shipping discount
+    let validatedCoupon = null;
+    if (couponCode && typeof couponCode === 'string' && couponCode.trim()) {
+      try {
+        const couponRes = await CouponService.validateCoupon(
+          couponCode.trim(), 
+          calculatedSubtotal, 
+          shippingFee
+        );
+        if (couponRes && couponRes.coupon) {
+          validatedCoupon = couponRes.coupon;
+          if (couponRes.discountType === 'FREE_SHIPPING' || couponRes.isShippingDiscount) {
+            // Deduct 100% of the selected governorate's shipping fee directly
+            // (shippingDiscount = shippingFee, making net customer shipping = 0 EGP)
+            // Do NOT alter product prices or product subtotals.
+            shippingDiscount = shippingFee;
+          } else {
+            discount = couponRes.discountAmount || 0;
+          }
+          await Coupon.findByIdAndUpdate(validatedCoupon._id, { $inc: { usedCount: 1 } });
+        }
+      } catch (err) {
+        throw err;
+      }
     }
 
-    const calculatedTotal = Math.max(0, calculatedSubtotal - discount + totalShippingOrMetro + paymentFee);
+    const shippingFeeCharged = deliveryMethod === 'home_delivery'
+      ? Math.max(0, shippingFee - shippingDiscount)
+      : 0;
+    const finalMetroFee = deliveryMethod === 'metro_pickup' ? metroPickupFee : 0;
+    const totalShippingOrMetro = deliveryMethod === 'metro_pickup' ? finalMetroFee : shippingFeeCharged;
+    const paymentFee = 0;
+    const normPaymentMethod = (paymentMethod || 'cod').toLowerCase();
+
+    const calculatedTotal = Math.max(0, calculatedSubtotal - discount + totalShippingOrMetro);
     const orderNumber = generateOrderNumber();
+
+    // Marketing Attribution Normalization
+    const rawAttribution = payload.attribution || {};
+    let source = String(rawAttribution.source || payload.utm_source || 'direct').trim().toLowerCase();
+    let medium = String(rawAttribution.medium || payload.utm_medium || 'none').trim().toLowerCase();
+    const campaign = String(rawAttribution.campaign || payload.utm_campaign || '').trim();
+    const content = String(rawAttribution.content || payload.utm_content || '').trim();
+    const term = String(rawAttribution.term || payload.utm_term || '').trim();
+    const fbclid = String(rawAttribution.fbclid || payload.fbclid || '').trim();
+    const ttclid = String(rawAttribution.ttclid || payload.ttclid || '').trim();
+
+    // Auto-detect channel based on parameters & referrer
+    let channel = 'direct';
+    if (fbclid || source.includes('facebook') || source.includes('instagram') || source.includes('meta')) {
+      channel = 'meta';
+      if (source === 'direct') source = 'meta';
+      if (medium === 'none') medium = 'cpc';
+    } else if (ttclid || source.includes('tiktok')) {
+      channel = 'tiktok';
+      if (source === 'direct') source = 'tiktok';
+      if (medium === 'none') medium = 'cpc';
+    } else if (source.includes('google')) {
+      channel = 'google';
+    } else if (source === 'direct' || source === 'none' || !source) {
+      channel = 'direct';
+      source = 'direct';
+    } else {
+      channel = medium.includes('cpc') || medium.includes('paid') ? 'other' : 'organic';
+    }
+
+    const attribution = {
+      source,
+      medium,
+      campaign,
+      content,
+      term,
+      fbclid,
+      ttclid,
+      channel
+    };
+    const metaEventId = `order_${orderNumber}`;
 
     const order = await Order.create({
       orderNumber,
@@ -121,14 +286,20 @@ class OrderService {
       items: validatedItems,
       subtotal: calculatedSubtotal,
       discount,
-      couponCode: couponCode || null,
+      shippingDiscount,
+      couponCode: couponCode ? couponCode.trim().toUpperCase() : null,
       deliveryMethod,
       metroPickup: deliveryMethod === 'metro_pickup' ? metroPickup : null,
-      metroPickupFee: deliveryMethod === 'metro_pickup' ? metroPickupFee : 0,
-      shipping: deliveryMethod === 'home_delivery' ? shippingFee : 0,
+      metroPickupFee: finalMetroFee,
+      shipping: shippingFeeCharged,
+      shippingFeeCharged,
+      actualOutboundShippingCost: deliveryMethod === 'home_delivery' ? actualOutboundShippingCost : finalMetroFee,
+      realShippingCost: deliveryMethod === 'home_delivery' ? actualOutboundShippingCost : finalMetroFee,
+      actualReturnShippingCost: 0,
       paymentFee,
-      realShippingCost,
       total: calculatedTotal,
+      totalCogs: Number(totalCogs.toFixed(2)),
+      inventoryDeducted: true,
       orderStatus: 'pending',
       paymentStatus: 'pending',
       paymentMethod: normPaymentMethod,
@@ -139,117 +310,193 @@ class OrderService {
       shippingAddress: deliveryMethod === 'home_delivery' ? shippingAddress : {},
       customerPhone: customerPhone || '',
       customerPhone2: customerPhone2 || null,
-      customerEmail: customerEmail || null
+      customerEmail: resolvedCustomerEmail,
+      attribution,
+      metaEventId
     });
+
+    // Deduct finished liquid inventory for items
+    for (const vItem of validatedItems) {
+      if (vItem.liquidGramsConsumed > 0) {
+        const prod = await Product.findById(vItem.product);
+        if (prod) {
+          const prevLiquid = prod.finishedLiquidGrams || 0;
+          prod.finishedLiquidGrams = Math.max(0, prevLiquid - vItem.liquidGramsConsumed);
+          prod.totalConsumedLiquidGrams = (prod.totalConsumedLiquidGrams || 0) + vItem.liquidGramsConsumed;
+          await prod.save();
+
+          await StockMovement.create({
+            itemType: 'FinishedLiquid',
+            product: prod._id,
+            itemName: `${prod.name} (Finished Liquid)`,
+            movementType: 'SALE',
+            quantityBefore: prevLiquid,
+            quantityChange: -vItem.liquidGramsConsumed,
+            quantityAfter: prod.finishedLiquidGrams,
+            unit: 'gram',
+            unitCost: prod.finishedLiquidCostPerGram || 0,
+            totalValue: vItem.liquidGramsConsumed * (prod.finishedLiquidCostPerGram || 0),
+            reason: `Order #${orderNumber} sold/reserved (${vItem.size} x ${vItem.quantity})`,
+            referenceId: orderNumber,
+            referenceType: 'Order'
+          });
+        }
+      }
+    }
+
+    // Deduct packaging materials (1 bottle, 1 sticker, 1 box per unit) from Raw Materials
+    await OrderService.adjustPackagingForOrder(order, 'deduct', finalCustomerId);
+
+    if (validatedCoupon) {
+      await Coupon.findByIdAndUpdate(validatedCoupon._id, { $inc: { usedCount: 1 } });
+    }
+
+    // Fire server-side Meta Conversions API (CAPI) for Purchase event (non-blocking)
+    sendMetaCapiPurchase({
+      order,
+      clientIp: payload.clientIp,
+      userAgent: payload.userAgent,
+      fbp: payload.fbp,
+      fbc: payload.fbc,
+      fbclid: attribution.fbclid
+    }).catch(err => {
+      console.warn('[OrderService] Meta CAPI non-blocking dispatch warning:', err.message);
+    });
+
+    // Dispatch order received email to customer & new-order alert to store owner (non-fatal)
+    try {
+      const trackingUrl = `${settings.storeUrl || 'https://m20fragrance.com'}/track-order?order=${order.orderNumber}`;
+      const emailTasks = [
+        EmailService.sendAdminNewOrderAlert({
+          orderNumber: order.orderNumber,
+          customerName: resolvedCustomerName,
+          customerPhone: customerPhone || customerRecord?.phone || '',
+          customerEmail: resolvedCustomerEmail,
+          total: order.total,
+          items: order.items,
+          deliveryMethod: order.deliveryMethod,
+          paymentMethod: order.paymentMethod
+        })
+      ];
+
+      if (resolvedCustomerEmail) {
+        emailTasks.push(
+          EmailService.sendOrderReceived({
+            to: resolvedCustomerEmail,
+            name: resolvedCustomerName,
+            orderNumber: order.orderNumber,
+            total: order.total,
+            items: order.items,
+            deliveryMethod: order.deliveryMethod,
+            paymentMethod: order.paymentMethod,
+            trackingUrl
+          })
+        );
+      }
+
+      await Promise.allSettled(emailTasks);
+    } catch (err) {
+      console.error('[OrderService.createOrder] Email dispatch error:', err);
+    }
 
     return order;
   }
 
   /**
    * Helper to calculate shipping fee and real internal shipping cost from Settings
+   * Strict Whole Integers only (Origin: Giza)
    */
   static calculateShippingFromSettings(settings, deliveryMethod, governorate, subtotal) {
     if (deliveryMethod === 'metro_pickup') {
-      const customerFee = settings.shipping?.metroPickupCustomerFee ?? 0;
-      const realCost = settings.shipping?.metroPickupRealCost ?? 15;
-      return { shippingFee: 0, metroPickupFee: customerFee, realShippingCost: realCost };
+      const customerFee = Math.round(Number(settings.shipping?.metroPickupCustomerFee ?? 0));
+      const realCost = Math.round(Number(settings.shipping?.metroPickupRealCost ?? 15));
+      return { 
+        shippingFee: 0, 
+        metroPickupFee: customerFee, 
+        realShippingCost: realCost,
+        actualOutboundShippingCost: realCost
+      };
     }
 
-    const freeGovs = settings.shipping?.freeShippingGovernorates || ['Cairo', 'القاهرة', 'Giza', 'الجيزة'];
-    const govRates = settings.shipping?.governorateRates || new Map();
-    const realCostMap = settings.shipping?.realCostMap || new Map();
+    const freeGovs = settings.shipping?.freeShippingGovernorates || [];
+    const govRates = settings.shipping?.governorateRates || {};
+    const realCostMap = settings.shipping?.realCostMap || govRates;
 
     const isFree = governorate && freeGovs.some(g => g.toLowerCase() === governorate.toLowerCase());
     
-    let shippingFee = 0;
-    if (!isFree) {
-      const rateVal = govRates instanceof Map ? govRates.get(governorate) : govRates[governorate];
-      shippingFee = rateVal !== undefined ? rateVal : (settings.shipping?.defaultCustomerRate || 55);
-    }
+    // Resolve whole-number rate for this governorate
+    const baseRate = Math.round(getGovernorateRate(governorate, govRates));
+    const shippingFee = isFree ? 0 : baseRate;
 
-    let realShippingCost = 35; // Cairo/Giza default real cost
-    if (governorate) {
-      const realVal = realCostMap instanceof Map ? realCostMap.get(governorate) : realCostMap[governorate];
-      if (realVal !== undefined) {
-        realShippingCost = realVal;
-      } else if (!isFree) {
-        realShippingCost = 45;
-      }
-    }
+    // Carrier actual outbound shipping cost defaults to the whole-number governorate rate
+    const actualOutboundShippingCost = Math.round(getGovernorateRate(governorate, realCostMap));
 
-    return { shippingFee, metroPickupFee: 0, realShippingCost };
+    return { 
+      shippingFee, 
+      metroPickupFee: 0, 
+      realShippingCost: actualOutboundShippingCost,
+      actualOutboundShippingCost
+    };
   }
 
   /**
    * Helper / Static method to calculate shipping fee based on backend rules / pricing config
+   * Strict Whole Integers only
    */
   static getShippingFee({ deliveryMethod, governorate, city, subtotal }) {
     if (deliveryMethod === 'metro_pickup') {
-      const metroFee = process.env.METRO_PICKUP_FEE ? parseFloat(process.env.METRO_PICKUP_FEE) : 0;
+      const metroFee = process.env.METRO_PICKUP_FEE ? Math.round(parseFloat(process.env.METRO_PICKUP_FEE)) : 0;
       return { shippingFee: 0, metroPickupFee: metroFee };
     }
 
-    const governorateRates = {
-      'Cairo': 40,
-      'القاهرة': 40,
-      'Giza': 40,
-      'الجيزة': 40,
-      'Alexandria': 55,
-      'الإسكندرية': 55,
-      'Qalyubia': 50,
-      'القليوبية': 50,
-      'Sharqia': 60,
-      'الشرقية': 60,
-      'Dakahlia': 60,
-      'الدقهلية': 60,
-      'Gharbia': 60,
-      'الغربية': 60,
-      'Monufia': 60,
-      'المنوفية': 60,
-      'Beheira': 65,
-      'البحيرة': 65,
-      'Ismailia': 65,
-      'الإسماعيلية': 65,
-      'Suez': 65,
-      'السويس': 65,
-      'Port Said': 65,
-      'بور سعيد': 65,
-      'Faiyum': 70,
-      'الفيوم': 70,
-      'Beni Suef': 75,
-      'بني سويف': 75,
-      'Minya': 80,
-      'المنيا': 80,
-      'Assiut': 85,
-      'أسيوط': 85,
-      'Sohag': 85,
-      'سوهاج': 85,
-      'Qena': 90,
-      'قنا': 90,
-      'Luxor': 95,
-      'الأقصر': 95,
-      'Aswan': 100,
-      'أسوان': 100,
-      'Red Sea': 110,
-      'البحر الأحمر': 110,
-      'South Sinai': 110,
-      'جنوب سيناء': 110,
-      'North Sinai': 110,
-      'شمال سيناء': 110,
-      'Matrouh': 110,
-      'مطروح': 110,
-      'New Valley': 120,
-      'الوادي الجديد': 120
-    };
-
-    let shippingFee = 0;
-    if (governorate && governorateRates[governorate] !== undefined) {
-      shippingFee = governorateRates[governorate];
-    } else {
-      shippingFee = subtotal > 1500 ? 0 : 50;
-    }
-
+    const shippingFee = Math.round(getGovernorateRate(governorate));
     return { shippingFee, metroPickupFee: 0 };
+  }
+
+  /**
+   * Deduct or restock 1 unit each of empty bottle, sticker, and presentation box per bottle sold
+   */
+  static async adjustPackagingForOrder(order, action = 'deduct', adminUserId = null) {
+    const isDeduct = action === 'deduct';
+    for (const item of (order.items || [])) {
+      const qty = Number(item.quantity) || 1;
+      const sizeStr = (item.size || '50ml').trim().toLowerCase();
+
+      // Find matching bottle, sticker, box by size in name
+      const [bottle, sticker, box] = await Promise.all([
+        RawMaterial.findOne({ category: 'bottle', name: new RegExp(sizeStr, 'i') }),
+        RawMaterial.findOne({ category: 'sticker', name: new RegExp(sizeStr, 'i') }),
+        RawMaterial.findOne({ category: 'box', name: new RegExp(sizeStr, 'i') })
+      ]);
+
+      const materials = [bottle, sticker, box].filter(Boolean);
+      for (const mat of materials) {
+        const before = mat.currentStock || 0;
+        const change = isDeduct ? -qty : qty;
+        const after = Math.max(0, before + change);
+        mat.currentStock = after;
+        await mat.save();
+
+        await StockMovement.create({
+          itemType: 'RawMaterial',
+          rawMaterial: mat._id,
+          itemName: mat.name,
+          movementType: isDeduct ? 'SALE' : 'RETURN',
+          quantityBefore: before,
+          quantityChange: change,
+          quantityAfter: after,
+          unit: mat.unit || 'piece',
+          unitCost: mat.costPerUnit || 0,
+          totalValue: Number((qty * (mat.costPerUnit || 0)).toFixed(2)),
+          reason: isDeduct
+            ? `Order #${order.orderNumber} packaging fulfillment (${item.size} x ${qty})`
+            : `Order #${order.orderNumber} packaging restock (${item.size} x ${qty})`,
+          referenceId: order.orderNumber,
+          referenceType: 'Order',
+          createdBy: adminUserId || null
+        });
+      }
+    }
   }
 
   /**
@@ -271,6 +518,7 @@ class OrderService {
       ]
     })
       .populate('customer', 'name phone')
+      .populate('items.product', 'name images mainImage slug fragranceFamily')
       .sort({ createdAt: -1 });
 
     if (!orders || orders.length === 0) {
@@ -284,12 +532,14 @@ class OrderService {
    * Get order by ID or orderNumber
    */
   static async getOrderById(orderId, customerId = null) {
-    const filter = orderId.startsWith('ELAN-') ? { orderNumber: orderId } : { _id: orderId };
+    const filter = (orderId.startsWith('M20-') || orderId.startsWith('ELAN-')) ? { orderNumber: orderId } : { _id: orderId };
     if (customerId) {
       filter.customer = customerId;
     }
 
-    const order = await Order.findOne(filter).populate('customer', 'name phone userId isFirst100 foundingRank');
+    const order = await Order.findOne(filter)
+      .populate('customer', 'name phone userId isFirst100 foundingRank')
+      .populate('items.product', 'name images mainImage slug fragranceFamily');
     if (!order) {
       throw new AppError('Order not found.', 404, ErrorCodes.ORDER_NOT_FOUND, 'OrderService.getOrderById');
     }
@@ -335,6 +585,12 @@ class OrderService {
     if (query.paymentStatus) {
       filter.paymentStatus = query.paymentStatus;
     }
+    if (query.channel) {
+      filter['attribution.channel'] = query.channel;
+    }
+    if (query.campaign) {
+      filter['attribution.campaign'] = query.campaign;
+    }
     if (query.search) {
       filter.$or = [
         { orderNumber: { $regex: query.search, $options: 'i' } },
@@ -345,6 +601,7 @@ class OrderService {
     const [orders, total] = await Promise.all([
       Order.find(filter)
         .populate('customer', 'name phone userId isFirst100 foundingRank')
+        .populate('items.product', 'name images mainImage slug fragranceFamily')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit),
@@ -363,16 +620,496 @@ class OrderService {
   }
 
   /**
-   * Admin: Update order status manually
+   * Admin: Get marketing attribution and channel performance analytics
    */
-  static async updateOrderStatus(orderId, { orderStatus, paymentStatus }) {
-    const order = await Order.findById(orderId);
+  static async getMarketingAnalytics(query = {}) {
+    const filter = { orderStatus: { $ne: 'cancelled' } };
+    if (query.startDate || query.endDate) {
+      filter.createdAt = {};
+      if (query.startDate) filter.createdAt.$gte = new Date(query.startDate);
+      if (query.endDate) filter.createdAt.$lte = new Date(query.endDate);
+    }
+
+    const orders = await Order.find(filter)
+      .select('orderNumber total orderStatus paymentStatus attribution couponCode createdAt');
+
+    // Channels definitions
+    const channels = {
+      meta: { id: 'meta', name: 'Meta / Facebook & Instagram', count: 0, revenue: 0, deliveredCount: 0 },
+      tiktok: { id: 'tiktok', name: 'TikTok Ads & Organic', count: 0, revenue: 0, deliveredCount: 0 },
+      google: { id: 'google', name: 'Google Ads & Search', count: 0, revenue: 0, deliveredCount: 0 },
+      organic: { id: 'organic', name: 'Organic Social & Referrals', count: 0, revenue: 0, deliveredCount: 0 },
+      direct: { id: 'direct', name: 'Direct / Storefront Visits', count: 0, revenue: 0, deliveredCount: 0 },
+      other: { id: 'other', name: 'Other Marketing Channels', count: 0, revenue: 0, deliveredCount: 0 }
+    };
+
+    const campaigns = {};
+    const promoCodes = {};
+
+    let totalOrders = 0;
+    let totalRevenue = 0;
+
+    for (const order of orders) {
+      const ch = order.attribution?.channel || 'direct';
+      const key = channels[ch] ? ch : 'other';
+      const rev = Math.round(order.total || 0);
+
+      channels[key].count += 1;
+      channels[key].revenue += rev;
+      if (order.orderStatus === 'delivered') {
+        channels[key].deliveredCount += 1;
+      }
+
+      totalOrders += 1;
+      totalRevenue += rev;
+
+      // Campaign stats
+      const camp = order.attribution?.campaign;
+      if (camp) {
+        if (!campaigns[camp]) {
+          campaigns[camp] = { campaign: camp, channel: key, count: 0, revenue: 0 };
+        }
+        campaigns[camp].count += 1;
+        campaigns[camp].revenue += rev;
+      }
+
+      // Promo Code stats
+      const coup = order.couponCode;
+      if (coup) {
+        if (!promoCodes[coup]) {
+          promoCodes[coup] = { code: coup, count: 0, revenue: 0 };
+        }
+        promoCodes[coup].count += 1;
+        promoCodes[coup].revenue += rev;
+      }
+    }
+
+    const channelList = Object.values(channels).map(ch => ({
+      ...ch,
+      orderSharePercent: totalOrders > 0 ? Number(((ch.count / totalOrders) * 100).toFixed(1)) : 0,
+      revenueSharePercent: totalRevenue > 0 ? Number(((ch.revenue / totalRevenue) * 100).toFixed(1)) : 0
+    }));
+
+    const topCampaigns = Object.values(campaigns).sort((a, b) => b.revenue - a.revenue).slice(0, 10);
+    const topPromoCodes = Object.values(promoCodes).sort((a, b) => b.count - a.count).slice(0, 10);
+
+    return {
+      totalOrders,
+      totalRevenue,
+      channels: channelList,
+      topCampaigns,
+      topPromoCodes
+    };
+  }
+
+  /**
+   * Admin: Update order status manually with support for returned orders and shipping expenses
+   */
+  static async updateOrderStatus(orderId, payload = {}, adminUser = null) {
+    const {
+      orderStatus,
+      paymentStatus,
+      outboundShippingCost,
+      returnShippingCost,
+      actualOutboundShippingCost,
+      actualReturnShippingCost,
+      shippingFeeCharged,
+      returnReason,
+      paymentAccountId,
+      notes
+    } = payload;
+
+    const order = await Order.findById(orderId).populate('customer', 'name email phone');
     if (!order) {
       throw new AppError('Order not found.', 404, ErrorCodes.ORDER_NOT_FOUND, 'OrderService.updateOrderStatus');
     }
 
+    const prevOrderStatus = order.orderStatus;
+    const nextOrderStatus = orderStatus || order.orderStatus;
+    const nextPaymentStatus = paymentStatus || order.paymentStatus;
+    const isCancelling = (nextOrderStatus === 'cancelled' || nextPaymentStatus === 'refunded');
+
+    // Update actual outbound shipping cost if explicitly provided (strict whole integer)
+    if (actualOutboundShippingCost !== undefined && actualOutboundShippingCost !== null && actualOutboundShippingCost !== '') {
+      order.actualOutboundShippingCost = Math.max(0, Math.round(Number(actualOutboundShippingCost)));
+      order.realShippingCost = order.actualOutboundShippingCost;
+    }
+
+    if (shippingFeeCharged !== undefined && shippingFeeCharged !== null && shippingFeeCharged !== '') {
+      order.shippingFeeCharged = Math.max(0, Math.round(Number(shippingFeeCharged)));
+      order.shipping = order.shippingFeeCharged;
+    }
+
+    // If order was deducted and is being cancelled (not returned_from_shipping), restock finished liquid
+    if (isCancelling && nextOrderStatus !== 'returned_from_shipping' && order.inventoryDeducted) {
+      for (const item of (order.items || [])) {
+        if (item.liquidGramsConsumed > 0) {
+          const prod = await Product.findById(item.product);
+          if (prod) {
+            const prevLiquid = prod.finishedLiquidGrams || 0;
+            prod.finishedLiquidGrams = prevLiquid + item.liquidGramsConsumed;
+            prod.totalConsumedLiquidGrams = Math.max(0, (prod.totalConsumedLiquidGrams || 0) - item.liquidGramsConsumed);
+            await prod.save();
+
+            await StockMovement.create({
+              itemType: 'FinishedLiquid',
+              product: prod._id,
+              itemName: `${prod.name} (Finished Liquid)`,
+              movementType: 'RETURN',
+              quantityBefore: prevLiquid,
+              quantityChange: item.liquidGramsConsumed,
+              quantityAfter: prod.finishedLiquidGrams,
+              unit: 'gram',
+              unitCost: prod.finishedLiquidCostPerGram || 0,
+              totalValue: item.liquidGramsConsumed * (prod.finishedLiquidCostPerGram || 0),
+              reason: `Restocked from cancelled Order #${order.orderNumber}`,
+              referenceId: order.orderNumber,
+              referenceType: 'Order',
+              createdBy: adminUser?._id || null
+            });
+          }
+        }
+      }
+      await OrderService.adjustPackagingForOrder(order, 'restock', adminUser?._id);
+      order.inventoryDeducted = false;
+    } else if (!isCancelling && nextOrderStatus !== 'returned_from_shipping' && order.inventoryDeducted === false && orderStatus && orderStatus !== 'cancelled') {
+      // Re-deduct if reinstated from cancelled
+      for (const item of (order.items || [])) {
+        if (item.liquidGramsConsumed > 0) {
+          const prod = await Product.findById(item.product);
+          if (prod) {
+            const prevLiquid = prod.finishedLiquidGrams || 0;
+            prod.finishedLiquidGrams = Math.max(0, prevLiquid - item.liquidGramsConsumed);
+            prod.totalConsumedLiquidGrams = (prod.totalConsumedLiquidGrams || 0) + item.liquidGramsConsumed;
+            await prod.save();
+
+            await StockMovement.create({
+              itemType: 'FinishedLiquid',
+              product: prod._id,
+              itemName: `${prod.name} (Finished Liquid)`,
+              movementType: 'SALE',
+              quantityBefore: prevLiquid,
+              quantityChange: -item.liquidGramsConsumed,
+              quantityAfter: prod.finishedLiquidGrams,
+              unit: 'gram',
+              unitCost: prod.finishedLiquidCostPerGram || 0,
+              totalValue: item.liquidGramsConsumed * (prod.finishedLiquidCostPerGram || 0),
+              reason: `Re-deducted for reinstated Order #${order.orderNumber}`,
+              referenceId: order.orderNumber,
+              referenceType: 'Order',
+              createdBy: adminUser?._id || null
+            });
+          }
+        }
+      }
+      await OrderService.adjustPackagingForOrder(order, 'deduct', adminUser?._id);
+      order.inventoryDeducted = true;
+    }
+
+    // Handle Returned from Shipping Logic & Shipping Expenses
+    const hasShippingInput = outboundShippingCost !== undefined || returnShippingCost !== undefined || actualReturnShippingCost !== undefined || returnReason !== undefined;
+    if (nextOrderStatus === 'returned_from_shipping' || hasShippingInput) {
+      order.returnDetails = order.returnDetails || {};
+      order.returnDetails.isReturned = true;
+      if (!order.returnDetails.returnedAt) {
+        order.returnDetails.returnedAt = new Date();
+      }
+      if (!order.returnDetails.restockStatus) {
+        order.returnDetails.restockStatus = 'not_inspected';
+      }
+
+      const outCostVal = outboundShippingCost !== undefined 
+        ? outboundShippingCost 
+        : (actualOutboundShippingCost !== undefined ? actualOutboundShippingCost : (order.actualOutboundShippingCost || order.realShippingCost || 0));
+      const retCostVal = returnShippingCost !== undefined
+        ? returnShippingCost
+        : (actualReturnShippingCost !== undefined ? actualReturnShippingCost : (order.actualReturnShippingCost || order.returnDetails.returnShippingFee || 0));
+
+      order.returnDetails.outboundShippingFee = Math.max(0, Math.round(Number(outCostVal) || 0));
+      order.returnDetails.returnShippingFee = Math.max(0, Math.round(Number(retCostVal) || 0));
+      order.actualOutboundShippingCost = order.returnDetails.outboundShippingFee;
+      order.realShippingCost = order.actualOutboundShippingCost;
+      order.actualReturnShippingCost = order.returnDetails.returnShippingFee;
+
+      if (returnReason !== undefined) {
+        order.returnDetails.returnReason = String(returnReason || '').trim();
+      }
+      if (paymentAccountId !== undefined) {
+        order.returnDetails.paymentAccountId = paymentAccountId || null;
+      }
+
+      const totalShippingCharge = order.returnDetails.outboundShippingFee + order.returnDetails.returnShippingFee;
+      order.returnDetails.totalReturnShippingCost = totalShippingCharge;
+
+      // Automatically record or update shipping expenses in Finance (preventing duplicates)
+      if (totalShippingCharge > 0) {
+        let existingExpense = null;
+        if (order.returnDetails.shippingExpenseId) {
+          existingExpense = await Expense.findById(order.returnDetails.shippingExpenseId);
+        }
+        if (!existingExpense) {
+          existingExpense = await Expense.findOne({
+            $or: [
+              { relatedOrderId: order._id },
+              { title: `Return Shipping: Order #${order.orderNumber}` }
+            ]
+          });
+        }
+
+        const expNotes = `Outbound: ${order.returnDetails.outboundShippingFee || 0} EGP | Return: ${order.returnDetails.returnShippingFee || 0} EGP. Reason: ${order.returnDetails.returnReason || 'Delivery Refused / Returned'}`;
+
+        if (existingExpense) {
+          existingExpense.amount = totalShippingCharge;
+          existingExpense.notes = expNotes;
+          existingExpense.relatedOrderId = order._id;
+          if (paymentAccountId) {
+            existingExpense.paymentAccount = paymentAccountId;
+            const acc = await CashAccount.findById(paymentAccountId);
+            if (acc) existingExpense.paymentAccountName = acc.name;
+          }
+          await existingExpense.save();
+          order.returnDetails.shippingExpenseId = existingExpense._id;
+          order.returnDetails.shippingExpenseRecorded = true;
+        } else {
+          const count = await Expense.countDocuments();
+          const year = new Date().getFullYear();
+          const seq = String(count + 1).padStart(4, '0');
+          const expenseNumber = `EXP-${year}-${seq}`;
+
+          let accDoc = null;
+          if (paymentAccountId) {
+            accDoc = await CashAccount.findById(paymentAccountId);
+          }
+
+          const newExpense = await Expense.create({
+            expenseNumber,
+            title: `Return Shipping: Order #${order.orderNumber}`,
+            category: 'Transportation',
+            amount: totalShippingCharge,
+            relatedOrderId: order._id,
+            paymentAccount: accDoc ? accDoc._id : null,
+            paymentAccountName: accDoc ? accDoc.name : '',
+            date: new Date(),
+            notes: expNotes,
+            createdBy: adminUser?._id || null
+          });
+
+          order.returnDetails.shippingExpenseId = newExpense._id;
+          order.returnDetails.shippingExpenseRecorded = true;
+        }
+      } else if (totalShippingCharge === 0 && order.returnDetails.shippingExpenseId) {
+        await Expense.findByIdAndDelete(order.returnDetails.shippingExpenseId);
+        order.returnDetails.shippingExpenseId = null;
+        order.returnDetails.shippingExpenseRecorded = false;
+      }
+    }
+
     if (orderStatus) order.orderStatus = orderStatus;
     if (paymentStatus) order.paymentStatus = paymentStatus;
+
+    // Log status history event for audit
+    order.statusHistory = order.statusHistory || [];
+    order.statusHistory.push({
+      status: nextOrderStatus,
+      changedAt: new Date(),
+      changedBy: adminUser?._id || null,
+      note: notes || (nextOrderStatus === 'returned_from_shipping' ? `Status updated to Returned from Shipping. Reason: ${order.returnDetails?.returnReason || 'N/A'}` : `Status changed from ${prevOrderStatus} to ${nextOrderStatus}`),
+      metadata: {
+        outboundShippingFee: order.returnDetails?.outboundShippingFee || 0,
+        returnShippingFee: order.returnDetails?.returnShippingFee || 0,
+        totalReturnShippingCost: order.returnDetails?.totalReturnShippingCost || 0,
+        shippingExpenseRecorded: order.returnDetails?.shippingExpenseRecorded || false
+      }
+    });
+
+    await order.save();
+
+    // Notify customer by email when fulfillment status advances
+    const statusToNotify = ['confirmed', 'processing', 'shipped', 'delivered'];
+    const recipientEmail = order.customerEmail || order.customer?.email;
+    if (orderStatus && nextOrderStatus !== prevOrderStatus && statusToNotify.includes(nextOrderStatus) && recipientEmail) {
+      try {
+        const settings = await SettingsService.getSettings();
+        const trackingUrl = `${settings.storeUrl || 'https://m20fragrance.com'}/track-order?order=${order.orderNumber}`;
+        await EmailService.sendOrderStatusUpdate({
+          to: recipientEmail,
+          name: order.customer?.name || 'Valued Customer',
+          orderNumber: order.orderNumber,
+          orderStatus: nextOrderStatus,
+          total: order.total,
+          items: order.items,
+          trackingUrl
+        });
+      } catch (err) {
+        console.error('[OrderService.updateOrderStatus] Email dispatch error:', err);
+      }
+    }
+
+    return order;
+  }
+
+  /**
+   * Admin: Confirm physical inspection and inventory restock for returned order
+   * Restores finished liquid inventory ONLY after products have been physically verified as reusable.
+   */
+  static async confirmReturnRestock(orderId, { inspectionOutcome, action, inspectionNotes, notes } = {}, adminUser = null) {
+    const order = await Order.findById(orderId).populate('customer', 'name email phone');
+    if (!order) {
+      throw new AppError('Order not found.', 404, ErrorCodes.ORDER_NOT_FOUND, 'OrderService.confirmReturnRestock');
+    }
+
+    if (order.orderStatus !== 'returned_from_shipping') {
+      throw new AppError('Only orders in "Returned from Shipping" status can be inspected and restocked.', 400);
+    }
+
+    order.returnDetails = order.returnDetails || {};
+
+    if (order.returnDetails.restockStatus === 'inspected_restocked') {
+      throw new AppError('This returned order has already been inspected and restocked. Duplicate restocking prevented.', 400);
+    }
+
+    const outcome = inspectionOutcome || action || 'reusable';
+    const comments = inspectionNotes || notes || '';
+
+    if (outcome === 'reusable') {
+      // Restore finished liquid inventory
+      for (const item of (order.items || [])) {
+        if (item.liquidGramsConsumed > 0) {
+          const prod = await Product.findById(item.product);
+          if (prod) {
+            const prevLiquid = prod.finishedLiquidGrams || 0;
+            prod.finishedLiquidGrams = prevLiquid + item.liquidGramsConsumed;
+            prod.totalConsumedLiquidGrams = Math.max(0, (prod.totalConsumedLiquidGrams || 0) - item.liquidGramsConsumed);
+            await prod.save();
+
+            await StockMovement.create({
+              itemType: 'FinishedLiquid',
+              product: prod._id,
+              itemName: `${prod.name || item.productName} (Finished Liquid)`,
+              movementType: 'RETURN',
+              quantityBefore: prevLiquid,
+              quantityChange: item.liquidGramsConsumed,
+              quantityAfter: prod.finishedLiquidGrams,
+              unit: 'gram',
+              unitCost: prod.finishedLiquidCostPerGram || 0,
+              totalValue: item.liquidGramsConsumed * (prod.finishedLiquidCostPerGram || 0),
+              reason: `Physical inspection confirmed reusable: Returned Order #${order.orderNumber} restocked`,
+              referenceId: order.orderNumber,
+              referenceType: 'Order',
+              createdBy: adminUser?._id || null
+            });
+          }
+        }
+      }
+
+      order.returnDetails.restockStatus = 'inspected_restocked';
+      order.returnDetails.restockedAt = new Date();
+      order.returnDetails.restockedBy = adminUser?._id || null;
+      order.returnDetails.inspectionNotes = comments || 'Confirmed physically intact and reusable; restocked to finished liquid.';
+      await OrderService.adjustPackagingForOrder(order, 'restock', adminUser?._id);
+      order.inventoryDeducted = false;
+    } else {
+      // Marked as damaged / spoiled - do NOT restock
+      order.returnDetails.restockStatus = 'inspected_damaged_discarded';
+      order.returnDetails.restockedAt = new Date();
+      order.returnDetails.restockedBy = adminUser?._id || null;
+      order.returnDetails.inspectionNotes = comments || 'Products damaged or unsealed during courier transit; discarded.';
+
+      for (const item of (order.items || [])) {
+        if (item.liquidGramsConsumed > 0) {
+          await StockMovement.create({
+            itemType: 'FinishedLiquid',
+            product: item.product,
+            itemName: `${item.productName} (Damaged Return)`,
+            movementType: 'DAMAGED',
+            quantityBefore: 0,
+            quantityChange: 0,
+            quantityAfter: 0,
+            unit: 'gram',
+            unitCost: 0,
+            totalValue: 0,
+            reason: `Damaged return inspection: Order #${order.orderNumber} items discarded; inventory NOT restocked.`,
+            referenceId: order.orderNumber,
+            referenceType: 'Order',
+            createdBy: adminUser?._id || null
+          });
+        }
+      }
+    }
+
+    order.statusHistory = order.statusHistory || [];
+    order.statusHistory.push({
+      status: order.orderStatus,
+      changedAt: new Date(),
+      changedBy: adminUser?._id || null,
+      note: `Inspection complete: ${inspectionOutcome === 'reusable' ? 'Items confirmed reusable and restocked' : 'Items marked damaged and discarded'}. Notes: ${inspectionNotes || 'None'}`
+    });
+
+    await order.save();
+    return order;
+  }
+
+  /**
+   * Admin: Process customer refund for a returned paid order
+   */
+  static async processReturnRefund(orderId, { refundAmount, cashAccountId, notes }, adminUser = null) {
+    const order = await Order.findById(orderId).populate('customer', 'name email phone');
+    if (!order) {
+      throw new AppError('Order not found.', 404, ErrorCodes.ORDER_NOT_FOUND, 'OrderService.processReturnRefund');
+    }
+
+    if (order.paymentStatus !== 'paid') {
+      throw new AppError('Refunds can only be processed on orders where customer payment was collected.', 400);
+    }
+
+    const amt = Number(refundAmount);
+    if (isNaN(amt) || amt <= 0) {
+      throw new AppError('Refund amount must be a positive number.', 400);
+    }
+
+    if (amt > order.total) {
+      throw new AppError(`Refund amount (${amt} EGP) cannot exceed order total (${order.total} EGP).`, 400);
+    }
+
+    let selectedAccount = null;
+    if (cashAccountId) {
+      selectedAccount = await CashAccount.findById(cashAccountId);
+    } else if (order.cashAccount) {
+      selectedAccount = await CashAccount.findById(order.cashAccount);
+    } else {
+      selectedAccount = await CashAccount.findOne({ active: true });
+    }
+
+    if (selectedAccount) {
+      selectedAccount.balance = (selectedAccount.balance || 0) - amt;
+      selectedAccount.transactions.push({
+        type: 'REFUND',
+        amount: -amt,
+        balanceAfter: selectedAccount.balance,
+        referenceId: order.orderNumber,
+        referenceType: 'ORDER',
+        description: `Customer refund for returned Order #${order.orderNumber}`,
+        createdBy: adminUser?._id || null,
+        date: new Date()
+      });
+      await selectedAccount.save();
+    }
+
+    order.paymentStatus = 'refunded';
+    order.returnDetails = order.returnDetails || {};
+    order.returnDetails.refundStatus = 'refunded';
+    order.returnDetails.refundAmount = amt;
+    order.returnDetails.refundedAt = new Date();
+    order.returnDetails.refundCashAccountId = selectedAccount ? selectedAccount._id : null;
+    order.returnDetails.refundNotes = notes || '';
+
+    order.statusHistory = order.statusHistory || [];
+    order.statusHistory.push({
+      status: order.orderStatus,
+      changedAt: new Date(),
+      changedBy: adminUser?._id || null,
+      note: `Customer refund of ${amt} EGP processed via ${selectedAccount?.name || 'Cash'}. Notes: ${notes || 'None'}`
+    });
 
     await order.save();
     return order;
@@ -443,7 +1180,7 @@ class OrderService {
     if (customerEmail) {
       try {
         const settings = await SettingsService.getSettings();
-        const trackingUrl = `${settings.storeUrl || 'https://elan.online'}/track-order?order=${order.orderNumber}`;
+        const trackingUrl = `${settings.storeUrl || 'https://m20fragrance.com'}/track-order?order=${order.orderNumber}`;
         await EmailService.sendOrderConfirmation({
           to: customerEmail,
           name: order.customer?.name || 'Valued Customer',
@@ -581,10 +1318,17 @@ class OrderService {
       });
     }
 
-    const numShipping = Math.max(0, Number(shipping) || 0);
-    const numDiscount = Math.max(0, Number(discount) || 0);
+    const numShipping = Math.max(0, Math.round(Number(payload.shippingFeeCharged ?? shipping ?? 0)));
+    const numDiscount = Math.max(0, Math.round(Number(discount) || 0));
     const calculatedTotal = Math.max(0, calculatedSubtotal - numDiscount + numShipping);
     const orderNumber = generateOrderNumber();
+
+    const defaultOutboundRate = deliveryMethod === 'home_delivery' 
+      ? getGovernorateRate(shippingAddress.governorate) 
+      : 15;
+    const actualOutboundCost = payload.actualOutboundShippingCost !== undefined 
+      ? Math.round(Number(payload.actualOutboundShippingCost)) 
+      : defaultOutboundRate;
 
     const order = await Order.create({
       orderNumber,
@@ -592,12 +1336,16 @@ class OrderService {
       items: validatedItems,
       subtotal: calculatedSubtotal,
       discount: numDiscount,
+      shippingDiscount: 0,
       deliveryMethod,
       metroPickup: deliveryMethod === 'metro_pickup' ? metroPickup : null,
       metroPickupFee: deliveryMethod === 'metro_pickup' ? numShipping : 0,
       shipping: deliveryMethod === 'home_delivery' ? numShipping : 0,
+      shippingFeeCharged: deliveryMethod === 'home_delivery' ? numShipping : 0,
       paymentFee: 0,
-      realShippingCost: deliveryMethod === 'metro_pickup' ? 15 : 35,
+      actualOutboundShippingCost: actualOutboundCost,
+      realShippingCost: actualOutboundCost,
+      actualReturnShippingCost: 0,
       total: calculatedTotal,
       orderStatus: orderStatus || 'confirmed',
       paymentStatus: paymentStatus || 'pending',

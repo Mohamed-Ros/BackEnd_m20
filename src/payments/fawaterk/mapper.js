@@ -32,7 +32,7 @@ const mapOrderToFawaterkInvoice = (order, customer) => {
   // Name splitting safely
   const nameParts = (customer.name || 'Valued Customer').trim().split(' ');
   const first_name = nameParts[0] || 'Customer';
-  const last_name = nameParts.slice(1).join(' ') || 'ÉLAN';
+  const last_name = nameParts.slice(1).join(' ') || 'M20';
 
   return {
     payment_method_id: 1, // Default card/hosted checkout
@@ -41,7 +41,7 @@ const mapOrderToFawaterkInvoice = (order, customer) => {
     customer: {
       first_name,
       last_name,
-      email: customer.email || `${customer.phone.replace(/[^0-9]/g, '')}@elan-fragrance.com`,
+      email: customer.email || `${customer.phone.replace(/[^0-9]/g, '')}@m20fragrance.com`,
       phone: customer.phone,
       address: order.shippingAddress.street || 'Cairo, Egypt'
     },

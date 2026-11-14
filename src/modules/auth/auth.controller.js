@@ -27,6 +27,27 @@ class AuthController {
   }
 
   /**
+   * Request a 6-digit passwordless email OTP for sign in / quick join
+   */
+  static async requestOTP(req, res, next) {
+    try {
+      const { email, name } = req.body;
+      const result = await AuthService.requestEmailOTP({ email, name });
+
+      return sendSuccess(
+        res,
+        200,
+        'Verification code sent to your email.',
+        SuccessCodes.SENT,
+        'AuthController.requestOTP',
+        result
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
    * Verify email OTP code
    */
   static async verifyOTP(req, res, next) {
@@ -37,7 +58,7 @@ class AuthController {
       return sendSuccess(
         res,
         200,
-        'Email verified successfully. Welcome to ÉLAN.',
+        'Email verified successfully. Welcome to M20.',
         SuccessCodes.AUTHENTICATED,
         'AuthController.verifyOTP',
         result
@@ -79,7 +100,9 @@ class AuthController {
       return sendSuccess(
         res,
         200,
-        'Login successful.',
+        result.requiresVerification
+          ? 'Please verify your email with the code sent to your inbox.'
+          : 'Login successful.',
         SuccessCodes.AUTHENTICATED,
         'AuthController.login',
         result

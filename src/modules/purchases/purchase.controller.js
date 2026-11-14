@@ -28,9 +28,18 @@ const create = async (req, res, next) => {
   }
 };
 
+const update = async (req, res, next) => {
+  try {
+    const purchase = await purchaseService.updatePurchase(req.params.id, req.body, req.user?._id);
+    return sendResponse(res, 200, 'Purchase updated successfully', purchase);
+  } catch (err) {
+    next(err);
+  }
+};
+
 const deletePurchase = async (req, res, next) => {
   try {
-    const result = await purchaseService.deletePurchase(req.params.id);
+    const result = await purchaseService.deletePurchase(req.params.id, req.user?._id);
     return sendResponse(res, 200, 'Purchase deleted successfully', result);
   } catch (err) {
     next(err);
@@ -41,6 +50,7 @@ module.exports = {
   getAll,
   getById,
   create,
+  update,
   deletePurchase
 };
 

@@ -89,9 +89,11 @@ const createFormula = async (data, userId) => {
   return formula;
 };
 
-const calculateBatchPreview = async ({ fragranceId, formulaId, finalBatchWeight, concentration }) => {
-  const batchWeight = Number(finalBatchWeight);
-  const concPercent = Number(concentration);
+const calculateBatchPreview = async (data = {}) => {
+  const formulaId = data.formulaId || data.formula;
+  let fragranceId = data.fragranceId || data.fragrance || data.productId;
+  const batchWeight = Number(data.finalBatchWeight ?? data.totalWeightGrams ?? data.batchWeight);
+  const concPercent = Number(data.concentration ?? data.concentrationPercent ?? 25);
 
   if (!batchWeight || batchWeight <= 0) {
     throw new AppError('Final batch weight in grams must be greater than 0', 400);
@@ -194,9 +196,81 @@ const calculateBatchPreview = async ({ fragranceId, formulaId, finalBatchWeight,
   };
 };
 
+const updateFormula = async (id, data) => {
+  const formula = await Formula.findById(id);
+  if (!formula) {
+    throw new AppError('Formula not found', 404);
+  }
+
+  if (data.notes !== undefined) formula.notes = data.notes;
+  if (data.active !== undefined) formula.active = data.active;
+
+  if (Array.isArray(data.ingredients) && data.ingredients.length > 0) {
+    const totalPercentage = data.ingredients.reduce(
+      (sum, item) => sum + (Number(item.percentage) || 0),
+      0
+    );
+
+    if (Math.abs(totalPercentage - 100) > 0.01) {
+      throw new AppError(
+        `Total ingredient percentages must equal exactly 100%. Current total is ${totalPercentage}%.`,
+        400
+      );
+    }
+
+    const enrichedIngredients = [];
+    for (const item of data.ingredients) {
+      const rawMaterial = await RawMaterial.findById(item.rawMaterial);
+      if (!rawMaterial) {
+        throw new AppError(`Raw material ID ${item.rawMaterial} not found`, 404);
+      }
+      enrichedIngredients.push({
+        rawMaterial: rawMaterial._id,
+        rawMaterialName: rawMaterial.name,
+        percentage: Number(item.percentage),
+        notes: item.notes || ''
+      });
+    }
+    formula.ingredients = enrichedIngredients;
+  }
+
+  await formula.save();
+  return formula;
+};
+
+const deleteFormula = async (id) => {
+  const formula = await Formula.findById(id);
+  if (!formula) {
+    throw new AppError('Formula not found', 404);
+  }
+
+  await Formula.findByIdAndDelete(id);
+
+  const Product = require('../products/product.model');
+  await Product.updateOne({ currentFormula: id }, { $unset: { currentFormula: 1 } });
+
+  return { message: 'Formula deleted successfully' };
+};
+
+const createFormulaVersion = async (id, data, userId) => {
+  const existing = await Formula.findById(id);
+  if (!existing) {
+    throw new AppError('Original formula not found', 404);
+  }
+
+  return createFormula({
+    productId: existing.fragrance,
+    ingredients: data.ingredients || existing.ingredients,
+    notes: data.notes || existing.notes,
+  }, userId);
+};
+
 module.exports = {
   getAllFormulas,
   getFormulaById,
   createFormula,
+  updateFormula,
+  deleteFormula,
+  createFormulaVersion,
   calculateBatchPreview
 };

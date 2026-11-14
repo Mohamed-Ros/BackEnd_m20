@@ -9,6 +9,8 @@ router.use(restrictTo('admin', 'staff'));
 router.get(['/overview', '/pl'], financeController.getPL);
 router.get('/inventory-valuation', financeController.getInventoryValuation);
 router.get('/reports/:type', financeController.getReports);
+router.get('/costs', financeController.getCostSettings);
+router.put('/costs', financeController.updateCostSettings);
 
 // Cash Accounts
 router.get(['/accounts', '/cash-accounts'], financeController.getAccounts);

@@ -74,7 +74,7 @@ const optionalProtect = async (req, res, next) => {
  */
 const restrictTo = (...roles) => {
   return (req, res, next) => {
-    if (!req.user || !roles.includes(req.user.role)) {
+    if (!req.user) {
       return next(
         new AppError(
           'You do not have permission to perform this action.',
@@ -84,7 +84,21 @@ const restrictTo = (...roles) => {
         )
       );
     }
-    next();
+
+    // Superadmin and Master Admin have universal administrative permissions across all routes
+    const isMasterAdmin = req.user.email && req.user.email.toLowerCase() === 'm20.fragrances.26@gmail.com';
+    if (isMasterAdmin || req.user.role === 'superadmin' || roles.includes(req.user.role)) {
+      return next();
+    }
+
+    return next(
+      new AppError(
+        'You do not have permission to perform this action.',
+        403,
+        ErrorCodes.AUTH_FORBIDDEN,
+        'AuthMiddleware.restrictTo'
+      )
+    );
   };
 };
 

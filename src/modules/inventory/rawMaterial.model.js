@@ -15,9 +15,12 @@ const rawMaterialSchema = new mongoose.Schema(
         'fragrance_oil',
         'alcohol',
         'bottle',
+        'sprayer',
+        'cap',
         'sticker',
         'box',
         'bag',
+        'packaging',
         'tester',
         'other'
       ],
@@ -72,6 +75,13 @@ const rawMaterialSchema = new mongoose.Schema(
 // Virtual property for total current value
 rawMaterialSchema.virtual('totalValue').get(function () {
   return (this.currentStock || 0) * (this.costPerGram || 0);
+});
+
+// Virtual property for unit cost (alias for costPerGram)
+rawMaterialSchema.virtual('unitCost').get(function () {
+  return this.costPerGram || 0;
+}).set(function (val) {
+  this.costPerGram = val;
 });
 
 rawMaterialSchema.set('toJSON', { virtuals: true });

@@ -114,6 +114,26 @@ const batchSchema = new mongoose.Schema(
       required: [true, 'Final batch weight in grams is required'],
       min: [1, 'Batch weight must be at least 1 gram']
     },
+    productionMode: {
+      type: String,
+      enum: ['bulk_weight', 'bottle_count'],
+      default: 'bulk_weight'
+    },
+    bottleCounts: {
+      type: Map,
+      of: Number,
+      default: {}
+    },
+    netUsableWeightGrams: {
+      type: Number,
+      default: 0
+    },
+    scaleReadings: {
+      scaleStep1ReadingGrams: { type: Number, default: 0 },
+      scaleStep2ReadingGrams: { type: Number, default: 0 },
+      alcoholMl: { type: Number, default: 0 },
+      alcoholLiters: { type: Number, default: 0 }
+    },
     concentration: {
       type: Number,
       required: [true, 'Fragrance concentration percentage is required'],
@@ -184,6 +204,29 @@ const batchSchema = new mongoose.Schema(
     timestamps: true
   }
 );
+
+batchSchema.virtual('totalWeightGrams').get(function () {
+  return this.finalBatchWeight;
+});
+
+batchSchema.virtual('batchCode').get(function () {
+  return this.batchNumber;
+});
+
+batchSchema.virtual('concentrationPercent').get(function () {
+  return this.concentration;
+});
+
+batchSchema.virtual('remainingLiquidGrams').get(function () {
+  const used = (this.bottledProducts || []).reduce((acc, p) => {
+    const units = (p.quantityProduced || 0) + (p.damagedCount || 0) + (p.testerCount || 0);
+    return acc + (units * (p.targetWeightGrams || 0));
+  }, 0);
+  return Math.max(0, (this.finalBatchWeight || 0) - used - (this.productionLossGrams || 0));
+});
+
+batchSchema.set('toJSON', { virtuals: true });
+batchSchema.set('toObject', { virtuals: true });
 
 batchSchema.index({ createdAt: -1 });
 

@@ -92,6 +92,24 @@ const getMovements = async (req, res, next) => {
   }
 };
 
+const getCostSettings = async (req, res, next) => {
+  try {
+    const costs = await financeService.getCostSettings();
+    return sendResponse(res, 200, 'Cost settings retrieved successfully', costs);
+  } catch (err) {
+    next(err);
+  }
+};
+
+const updateCostSettings = async (req, res, next) => {
+  try {
+    const costs = await financeService.updateCostSettings(req.body);
+    return sendResponse(res, 200, 'Cost settings updated successfully', costs);
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   getOverview,
   getPL,
@@ -102,6 +120,8 @@ module.exports = {
   createAccount,
   updateAccount,
   adjustBalance,
-  getMovements
+  getMovements,
+  getCostSettings,
+  updateCostSettings
 };
 
