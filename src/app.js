@@ -38,7 +38,13 @@ app.use(helmet());
 // 2. CORS Configuration
 app.use(
   cors({
-    origin: process.env.CORS_ORIGIN || '*',
+    // Credentials (sendBeacon / cookies) are incompatible with a '*' origin, so reflect the
+    // request origin when CORS_ORIGIN is unset or '*', otherwise allow the comma-separated list.
+    origin:
+      !process.env.CORS_ORIGIN || process.env.CORS_ORIGIN.trim() === '*'
+        ? true
+        : process.env.CORS_ORIGIN.split(',').map((o) => o.trim()).filter(Boolean),
+    credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'x-fawaterk-signature', 'signature']
   })
