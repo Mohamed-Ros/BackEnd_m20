@@ -9,7 +9,7 @@ const settingsSchema = new mongoose.Schema(
     },
     storeUrl: {
       type: String,
-      default: 'https://m20fragrance.com'
+      default: 'https://m20fragrance.store'
     },
     whatsappNumber: {
       type: String,

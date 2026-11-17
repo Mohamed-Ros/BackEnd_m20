@@ -84,7 +84,7 @@ Disallow: /api/
 Disallow: /checkout
 Disallow: /account
 
-Sitemap: https://m20fragrance.com/sitemap.xml
+Sitemap: https://m20fragrance.store/sitemap.xml
 `);
 });
 
@@ -92,7 +92,7 @@ app.get('/sitemap.xml', async (req, res) => {
   try {
     const Product = require('./modules/products/product.model');
     const products = await Product.find({ active: true }).select('slug updatedAt');
-    const baseUrl = 'https://m20fragrance.com';
+    const baseUrl = 'https://m20fragrance.store';
     const now = new Date().toISOString().split('T')[0];
 
     const staticUrls = [

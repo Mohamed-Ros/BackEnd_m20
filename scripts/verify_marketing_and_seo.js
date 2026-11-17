@@ -51,7 +51,7 @@ async function runTests() {
     assert(robotsRes.data.includes('Disallow: /admin'), 'robots.txt disallows /admin');
     assert(robotsRes.data.includes('Disallow: /api'), 'robots.txt disallows /api');
     assert(robotsRes.data.includes('Disallow: /checkout'), 'robots.txt disallows /checkout');
-    assert(robotsRes.data.includes('Sitemap: https://m20fragrance.com/sitemap.xml'), 'robots.txt points to official sitemap');
+    assert(robotsRes.data.includes('Sitemap: https://m20fragrance.store/sitemap.xml'), 'robots.txt points to official sitemap');
   } catch (err) {
     assert(false, `GET /robots.txt failed: ${err.message}`);
   }
@@ -62,7 +62,7 @@ async function runTests() {
     const sitemapRes = await axios.get(`${BASE_URL}/sitemap.xml`);
     assert(sitemapRes.status === 200, 'GET /sitemap.xml returns status 200');
     assert(sitemapRes.data.includes('<urlset'), 'sitemap.xml contains valid XML urlset');
-    assert(sitemapRes.data.includes('https://m20fragrance.com/'), 'sitemap.xml contains homepage');
+    assert(sitemapRes.data.includes('https://m20fragrance.store/'), 'sitemap.xml contains homepage');
     assert(sitemapRes.data.includes('hreflang="ar-eg"'), 'sitemap.xml contains Arabic hreflang');
     assert(sitemapRes.data.includes('hreflang="en-eg"'), 'sitemap.xml contains English hreflang');
   } catch (err) {

@@ -365,7 +365,7 @@ class OrderService {
 
     // Dispatch order received email to customer & new-order alert to store owner (non-fatal)
     try {
-      const trackingUrl = `${settings.storeUrl || 'https://m20fragrance.com'}/track-order?order=${order.orderNumber}`;
+      const trackingUrl = `${settings.storeUrl || 'https://m20fragrance.store'}/track-order?order=${order.orderNumber}`;
       const emailTasks = [
         EmailService.sendAdminNewOrderAlert({
           orderNumber: order.orderNumber,
@@ -930,7 +930,7 @@ class OrderService {
     if (orderStatus && nextOrderStatus !== prevOrderStatus && statusToNotify.includes(nextOrderStatus) && recipientEmail) {
       try {
         const settings = await SettingsService.getSettings();
-        const trackingUrl = `${settings.storeUrl || 'https://m20fragrance.com'}/track-order?order=${order.orderNumber}`;
+        const trackingUrl = `${settings.storeUrl || 'https://m20fragrance.store'}/track-order?order=${order.orderNumber}`;
         await EmailService.sendOrderStatusUpdate({
           to: recipientEmail,
           name: order.customer?.name || 'Valued Customer',
@@ -1180,7 +1180,7 @@ class OrderService {
     if (customerEmail) {
       try {
         const settings = await SettingsService.getSettings();
-        const trackingUrl = `${settings.storeUrl || 'https://m20fragrance.com'}/track-order?order=${order.orderNumber}`;
+        const trackingUrl = `${settings.storeUrl || 'https://m20fragrance.store'}/track-order?order=${order.orderNumber}`;
         await EmailService.sendOrderConfirmation({
           to: customerEmail,
           name: order.customer?.name || 'Valued Customer',

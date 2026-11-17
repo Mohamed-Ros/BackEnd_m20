@@ -69,7 +69,7 @@ const sendMetaCapiPurchase = async ({
 
     const eventId = `order_${order.orderNumber}`;
     const eventTime = Math.floor(Date.now() / 1000);
-    const storeUrl = settings?.storeUrl || 'https://m20fragrance.com';
+    const storeUrl = settings?.storeUrl || 'https://m20fragrance.store';
 
     // Hash email & phone
     const hashedEmail = hashData(order.customerEmail || order.customer?.email);
