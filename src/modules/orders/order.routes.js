@@ -33,6 +33,8 @@ router.post('/admin', protect, restrictTo('admin'), OrderController.createAdminO
 router.patch('/:id/status', protect, restrictTo('admin'), validate(updateOrderStatusSchema, 'Order.UpdateStatus'), OrderController.updateOrderStatus);
 router.post('/:id/confirm-return-restock', protect, restrictTo('admin'), validate(confirmReturnRestockSchema, 'Order.ConfirmRestock'), OrderController.confirmReturnRestock);
 router.post('/:id/process-return-refund', protect, restrictTo('admin'), validate(processReturnRefundSchema, 'Order.ProcessRefund'), OrderController.processReturnRefund);
+router.post('/admin/bulk-delete', protect, restrictTo('admin'), OrderController.bulkDeleteOrders);
+router.delete('/:id', protect, restrictTo('admin'), OrderController.deleteOrder);
 router.put('/:id/verify-payment', protect, restrictTo('admin'), OrderController.verifyPayment);
 
 module.exports = router;

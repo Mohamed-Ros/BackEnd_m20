@@ -323,6 +323,33 @@ class OrderController {
       next(error);
     }
   }
+
+  /**
+   * Admin: Delete a single order
+   */
+  static async deleteOrder(req, res, next) {
+    try {
+      const result = await OrderService.deleteOrders(
+        { ids: [req.params.id], restoreStock: req.query.restoreStock !== 'false' },
+        req.user
+      );
+      return sendSuccess(res, 200, 'Order deleted successfully.', SuccessCodes.FETCHED, 'OrderController.deleteOrder', result);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Admin: Bulk delete selected orders, or all orders (requires confirmation text)
+   */
+  static async bulkDeleteOrders(req, res, next) {
+    try {
+      const result = await OrderService.deleteOrders(req.body || {}, req.user);
+      return sendSuccess(res, 200, `${result.deletedCount} order(s) deleted successfully.`, SuccessCodes.FETCHED, 'OrderController.bulkDeleteOrders', result);
+    } catch (error) {
+      next(error);
+    }
+  }
 }
 
 module.exports = OrderController;

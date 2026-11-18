@@ -1397,6 +1397,69 @@ class OrderService {
 
     return order;
   }
+
+  /**
+   * Admin: Permanently delete one, several, or all orders.
+   * - Orders that still hold deducted inventory get their finished liquid + packaging returned to stock
+   *   (unless restoreStock === false), so stock counts stay correct.
+   * - Cash account balances are NOT reversed (money already received is real); adjust in Finance if needed.
+   */
+  static async deleteOrders({ ids = [], all = false, confirm = '', restoreStock = true } = {}, adminUser = null) {
+    let orders;
+    if (all) {
+      if (String(confirm).trim() !== 'DELETE ALL ORDERS') {
+        throw new AppError('Confirmation text mismatch. Type DELETE ALL ORDERS to delete every order.', 400, ErrorCodes.VALIDATION_ERROR || 'VALIDATION_ERROR', 'OrderService.deleteOrders');
+      }
+      orders = await Order.find({});
+    } else {
+      const cleanIds = [...new Set((Array.isArray(ids) ? ids : []).map(String))].filter((id) => mongoose.Types.ObjectId.isValid(id));
+      if (cleanIds.length === 0) {
+        throw new AppError('No valid order ids were provided.', 400, ErrorCodes.VALIDATION_ERROR || 'VALIDATION_ERROR', 'OrderService.deleteOrders');
+      }
+      if (cleanIds.length > 1000) {
+        throw new AppError('Too many orders in one request (max 1000).', 400, ErrorCodes.VALIDATION_ERROR || 'VALIDATION_ERROR', 'OrderService.deleteOrders');
+      }
+      orders = await Order.find({ _id: { $in: cleanIds } });
+    }
+
+    let restocked = 0;
+    for (const order of orders) {
+      if (restoreStock !== false && order.inventoryDeducted) {
+        for (const item of order.items || []) {
+          if (item.liquidGramsConsumed > 0) {
+            const prod = await Product.findById(item.product);
+            if (prod) {
+              const prevLiquid = prod.finishedLiquidGrams || 0;
+              prod.finishedLiquidGrams = prevLiquid + item.liquidGramsConsumed;
+              prod.totalConsumedLiquidGrams = Math.max(0, (prod.totalConsumedLiquidGrams || 0) - item.liquidGramsConsumed);
+              await prod.save();
+              await StockMovement.create({
+                itemType: 'FinishedLiquid',
+                product: prod._id,
+                itemName: `${prod.name} (Finished Liquid)`,
+                movementType: 'RETURN',
+                quantityBefore: prevLiquid,
+                quantityChange: item.liquidGramsConsumed,
+                quantityAfter: prod.finishedLiquidGrams,
+                unit: 'gram',
+                unitCost: prod.finishedLiquidCostPerGram || 0,
+                totalValue: item.liquidGramsConsumed * (prod.finishedLiquidCostPerGram || 0),
+                reason: `Restocked because Order #${order.orderNumber} was deleted`,
+                referenceId: order.orderNumber,
+                referenceType: 'Order',
+                createdBy: adminUser?._id || null
+              });
+            }
+          }
+        }
+        await OrderService.adjustPackagingForOrder(order, 'restock', adminUser?._id);
+        restocked += 1;
+      }
+      await Order.deleteOne({ _id: order._id });
+    }
+
+    return { deletedCount: orders.length, restockedOrders: restocked };
+  }
 }
 
 module.exports = OrderService;
