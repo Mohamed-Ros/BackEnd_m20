@@ -27,6 +27,7 @@ const financeRoutes = require('./modules/finance/finance.routes');
 const settingsRoutes = require('./modules/settings/settings.routes');
 const offerRoutes = require('./modules/offers/offer.routes');
 const marketingRoutes = require('./modules/marketing/marketing.routes');
+const seoRoutes = require('./modules/seo/seo.routes');
 
 
 const app = express();
@@ -151,6 +152,7 @@ app.use('/api/purchases', purchaseRoutes);
 app.use('/api/expenses', expenseRoutes);
 app.use('/api/finance', financeRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/seo', seoRoutes);
 app.use('/api/offers', offerRoutes);
 app.use('/api/marketing', marketingRoutes);
 
