@@ -71,6 +71,12 @@ class SettingsService {
           feePercent: settings.payments.fawaterk?.feePercent || 0
         }
       },
+      storeStatus: {
+        paused: !!settings.storeStatus?.paused,
+        messageAr: settings.storeStatus?.messageAr || '',
+        messageEn: settings.storeStatus?.messageEn || '',
+        resumeAt: settings.storeStatus?.resumeAt || null
+      },
       tracking: {
         enableTracking: settings.tracking?.enableTracking ?? true,
         metaPixelId: settings.tracking?.metaPixelId || process.env.META_PIXEL_ID || '',
@@ -181,6 +187,13 @@ class SettingsService {
             ...data.payments.fawaterk
           };
         }
+      }
+
+      if (data.storeStatus) {
+        settings.storeStatus = {
+          ...(settings.storeStatus?.toObject?.() || {}),
+          ...data.storeStatus
+        };
       }
 
       if (data.tracking) {

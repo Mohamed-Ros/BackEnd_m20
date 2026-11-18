@@ -17,6 +17,10 @@ const orderItemSchema = new mongoose.Schema(
       type: String,
       required: true
     },
+    isPreOrder: {
+      type: Boolean,
+      default: false
+    },
     size: {
       type: String,
       required: true

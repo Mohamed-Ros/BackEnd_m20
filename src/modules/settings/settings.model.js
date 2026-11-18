@@ -136,6 +136,13 @@ const settingsSchema = new mongoose.Schema(
         }
       }
     },
+    // Temporary store pause (controlled from dashboard)
+    storeStatus: {
+      paused: { type: Boolean, default: false },
+      messageAr: { type: String, default: 'المتجر متوقف مؤقتاً لأعمال الصيانة، نعود قريباً.' },
+      messageEn: { type: String, default: 'The store is temporarily paused for maintenance. We will be back soon.' },
+      resumeAt: { type: Date, default: null }
+    },
     // Ad Tracking & Pixel Integration (Meta Pixel, Server-side CAPI, TikTok Pixel)
     tracking: {
       enableTracking: { type: Boolean, default: true },

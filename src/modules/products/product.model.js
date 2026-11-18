@@ -193,6 +193,13 @@ const productSchema = new mongoose.Schema(
       default: false,
       index: true
     },
+    // Pre-order: product is shown & purchasable but ships later
+    preOrder: {
+      enabled: { type: Boolean, default: false },
+      expectedDate: { type: Date, default: null },
+      noteAr: { type: String, trim: true, default: '' },
+      noteEn: { type: String, trim: true, default: '' }
+    },
     active: {
       type: Boolean,
       default: true,

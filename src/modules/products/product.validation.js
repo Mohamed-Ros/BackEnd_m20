@@ -58,6 +58,14 @@ const createProductSchema = {
     sillageHours: Joi.number().min(0).allow(null, '').optional(),
     occasions: Joi.array().items(Joi.string()).optional(),
     featured: Joi.boolean().optional(),
+    preOrder: Joi.object()
+      .keys({
+        enabled: Joi.boolean().optional(),
+        expectedDate: Joi.date().allow(null, '').optional(),
+        noteAr: Joi.string().allow('').optional(),
+        noteEn: Joi.string().allow('').optional()
+      })
+      .optional(),
     active: Joi.boolean().optional()
   })
 };
@@ -89,6 +97,14 @@ const updateProductSchema = {
     sillageHours: Joi.number().min(0).allow(null, '').optional(),
     occasions: Joi.array().items(Joi.string()).optional(),
     featured: Joi.boolean().optional(),
+    preOrder: Joi.object()
+      .keys({
+        enabled: Joi.boolean().optional(),
+        expectedDate: Joi.date().allow(null, '').optional(),
+        noteAr: Joi.string().allow('').optional(),
+        noteEn: Joi.string().allow('').optional()
+      })
+      .optional(),
     active: Joi.boolean().optional()
   })
 };
