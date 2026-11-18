@@ -74,7 +74,7 @@ module.exports = {
     apiKey: process.env.FAWATERK_API_KEY || '',
     baseUrl: process.env.FAWATERK_BASE_URL || 'https://staging.fawaterk.com/api/v2',
     webhookSecret: process.env.FAWATERK_WEBHOOK_SECRET || '',
-    redirectUrl: process.env.FAWATERK_REDIRECT_URL || 'http://localhost:3000/checkout/success'
+    redirectUrl: process.env.FAWATERK_REDIRECT_URL || `${(process.env.STORE_URL || (isProduction ? 'https://m20fragrance.store' : 'http://localhost:5173')).replace(/\/+$/, '')}/checkout/success`
   },
   email: {
     service: smtpService,
