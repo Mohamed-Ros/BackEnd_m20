@@ -89,7 +89,7 @@ class UserController {
    */
   static async deleteUser(req, res, next) {
     try {
-      const result = await UserService.deleteUserByAdmin(req.params.id);
+      const result = await UserService.deleteUserByAdmin(req.params.id, req.user);
 
       return sendSuccess(
         res,

@@ -139,11 +139,27 @@ class UserService {
   /**
    * Admin / Super Admin: Delete User Account
    */
-  static async deleteUserByAdmin(id) {
-    const user = await User.findByIdAndDelete(id);
-    if (!user) {
+  static async deleteUserByAdmin(id, actingUser = null) {
+    const target = await User.findById(id);
+    if (!target) {
       throw new AppError('Account not found.', 404, ErrorCodes.USER_NOT_FOUND, 'UserService.deleteUserByAdmin');
     }
+
+    // Safety guards: never let the dashboard lock everyone out
+    if (actingUser && String(actingUser._id) === String(target._id)) {
+      throw new AppError('You cannot delete your own account.', 400, ErrorCodes.AUTH_FORBIDDEN, 'UserService.deleteUserByAdmin');
+    }
+    if (target.email && target.email.toLowerCase() === 'm20.fragrances.26@gmail.com') {
+      throw new AppError('The master admin account cannot be deleted.', 400, ErrorCodes.AUTH_FORBIDDEN, 'UserService.deleteUserByAdmin');
+    }
+    if (['admin', 'superadmin'].includes(target.role)) {
+      const otherAdmins = await User.countDocuments({ role: { $in: ['admin', 'superadmin'] }, _id: { $ne: target._id } });
+      if (otherAdmins === 0) {
+        throw new AppError('You cannot delete the last admin account.', 400, ErrorCodes.AUTH_FORBIDDEN, 'UserService.deleteUserByAdmin');
+      }
+    }
+
+    await User.deleteOne({ _id: target._id });
     return { success: true, message: 'Account deleted successfully.' };
   }
 
