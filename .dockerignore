@@ -1,0 +1,7 @@
+node_modules
+.env
+*.log
+backups
+.git
+test_elan_backend.js
+scripts

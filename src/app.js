@@ -31,6 +31,9 @@ const marketingRoutes = require('./modules/marketing/marketing.routes');
 
 const app = express();
 
+// Behind a reverse proxy / load balancer (nginx, Render, Railway, Heroku...) so req.ip and rate limiting use the real client IP
+app.set('trust proxy', 1);
+
 
 // 1. Security HTTP Headers
 app.use(helmet());
@@ -121,8 +124,6 @@ ${allUrls.map(u => `  <url>
     ${u.lastmod ? `<lastmod>${u.lastmod}</lastmod>` : `<lastmod>${now}</lastmod>`}
     <changefreq>${u.changefreq}</changefreq>
     <priority>${u.priority}</priority>
-    <xhtml:link rel="alternate" hreflang="ar-eg" href="${u.loc}?lang=ar" />
-    <xhtml:link rel="alternate" hreflang="en-eg" href="${u.loc}?lang=en" />
   </url>`).join('\n')}
 </urlset>`;
 

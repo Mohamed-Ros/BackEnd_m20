@@ -20,7 +20,8 @@ const connectDB = async () => {
   } catch (primaryError) {
     console.warn(`[DATABASE] Primary MongoDB connection error: ${primaryError.message}`);
 
-    if (primaryUri !== localUri) {
+    // Local failover is a dev convenience only. In production it would silently write to the wrong database.
+    if (!env.isProduction && primaryUri !== localUri) {
       console.log('[DATABASE] Failing over to local MongoDB on 127.0.0.1:27017...');
       try {
         const localConn = await mongoose.connect(localUri, {

@@ -38,12 +38,31 @@ const fromName = cleanEnvString(process.env.EMAIL_FROM_NAME) || 'M20 Maison';
 const fromAddress = cleanEnvString(process.env.EMAIL_FROM_ADDRESS) || smtpUser;
 const resolvedFrom = fromEmailRaw || (fromAddress ? `"${fromName}" <${fromAddress}>` : '');
 
+const isProduction = (process.env.NODE_ENV || 'development') === 'production';
+
+// Fail fast in production instead of running with unsafe defaults.
+if (isProduction) {
+  const missing = ['MONGO_URI', 'JWT_SECRET'].filter((k) => !cleanEnvString(process.env[k]));
+  if (missing.length) {
+    console.error(`[CONFIG] Missing required environment variables in production: ${missing.join(', ')}`);
+    process.exit(1);
+  }
+  if (cleanEnvString(process.env.JWT_SECRET).length < 32) {
+    console.error('[CONFIG] JWT_SECRET must be at least 32 characters in production.');
+    process.exit(1);
+  }
+  if (!cleanEnvString(process.env.CORS_ORIGIN) || cleanEnvString(process.env.CORS_ORIGIN) === '*') {
+    console.warn('[CONFIG] CORS_ORIGIN is unset or "*" in production. Set it to your store and dashboard domains.');
+  }
+}
+
 module.exports = {
+  isProduction,
   env: process.env.NODE_ENV || 'development',
   port: parseInt(process.env.PORT, 10) || 5000,
   mongoUri: process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/elan_fragrance',
   jwt: {
-    secret: process.env.JWT_SECRET || 'elan_fallback_secret_key',
+    secret: process.env.JWT_SECRET || (isProduction ? '' : 'elan_fallback_secret_key'),
     expiresIn: process.env.JWT_EXPIRES_IN || '30d'
   },
   cloudinary: {

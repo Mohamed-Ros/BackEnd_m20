@@ -1,14 +1,16 @@
 {
-  "name": "elan-backend",
+  "name": "m20-backend",
   "version": "1.0.0",
-  "description": "Backend for ÉLAN fragrance e-commerce brand",
+  "description": "Backend API for the M20 fragrance e-commerce store",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "nodemon src/server.js"
+    "dev": "nodemon src/server.js",
+    "setup:admin": "node src/scripts/setupMasterAdmin.js",
+    "backup": "node src/scripts/backupDatabase.js"
   },
   "keywords": [
-    "elan",
+    "m20",
     "fragrance",
     "ecommerce",
     "express",
@@ -16,7 +18,7 @@
     "fawaterk",
     "cloudinary"
   ],
-  "author": "ÉLAN Team",
+  "author": "M20 Team",
   "license": "ISC",
   "dependencies": {
     "axios": "^1.7.9",
@@ -37,5 +39,8 @@
   },
   "devDependencies": {
     "nodemon": "^3.1.9"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }

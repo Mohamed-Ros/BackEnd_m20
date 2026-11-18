@@ -29,6 +29,21 @@ const startServer = async () => {
       EmailService.verifyConnection().catch(() => {});
     });
 
+    // Graceful shutdown for process managers (PM2, Docker, Render, Railway)
+    const shutdown = (signal) => {
+      logger.info(`[SERVER] ${signal} received, shutting down gracefully...`);
+      server.close(async () => {
+        try {
+          await require('mongoose').connection.close();
+        } finally {
+          process.exit(0);
+        }
+      });
+      setTimeout(() => process.exit(1), 10000).unref();
+    };
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
+    process.on('SIGINT', () => shutdown('SIGINT'));
+
     // Handle Unhandled Promise Rejections
     process.on('unhandledRejection', (err) => {
       console.error('[UNHANDLED REJECTION] Shutting down gracefully...');

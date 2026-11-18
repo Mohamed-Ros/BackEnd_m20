@@ -85,6 +85,14 @@ class OrderService {
     const validatedItems = [];
     const activeOffers = await OfferService.getActiveOffers();
     const settings = await SettingsService.getSettings();
+    if (settings.storeStatus?.paused) {
+      throw new AppError(
+        settings.storeStatus.messageAr || settings.storeStatus.messageEn || 'المتجر متوقف مؤقتاً ولا يستقبل طلبات حالياً.',
+        503,
+        'STORE_PAUSED',
+        'OrderService.createOrder'
+      );
+    }
     const costDefaults = settings.costDefaults || {
       bottleWithCapSprayer: 45,
       sticker: 20,
@@ -101,20 +109,20 @@ class OrderService {
       }
       if (!product) {
         // Robust fallback: search by slug, variant SKU, or name
+        const escapeRx = (v) => String(v).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const cleanId = String(item.productId || '').trim().toLowerCase().replace(/^prod-/, '');
         const skuSearch = item.variantSKU ? String(item.variantSKU).trim() : '';
-        product = await Product.findOne({
-          $or: [
-            { slug: cleanId },
-            { slug: new RegExp(cleanId, 'i') },
-            { name: new RegExp(cleanId, 'i') },
-            { 'variants.SKU': new RegExp(skuSearch, 'i') }
-          ],
-          active: true
-        });
-      }
-      if (!product) {
-        product = await Product.findOne({ active: true });
+        const orClauses = [];
+        if (cleanId) {
+          orClauses.push({ slug: cleanId });
+          orClauses.push({ name: new RegExp(`^${escapeRx(cleanId)}$`, 'i') });
+        }
+        if (skuSearch) {
+          orClauses.push({ 'variants.SKU': new RegExp(`^${escapeRx(skuSearch)}$`, 'i') });
+        }
+        if (orClauses.length) {
+          product = await Product.findOne({ $or: orClauses, active: true });
+        }
       }
       if (!product || !product.active) {
         throw new AppError(`Product not available for purchase.`, 400, ErrorCodes.PRODUCT_NOT_FOUND, 'OrderService.createOrder');
@@ -180,6 +188,7 @@ class OrderService {
         product: product._id,
         variantSKU: variant.SKU,
         productName: product.name,
+        isPreOrder: !!product.preOrder?.enabled,
         size: variant.size,
         price: effectiveUnitPrice,
         quantity: item.quantity,
