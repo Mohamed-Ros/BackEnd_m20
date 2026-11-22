@@ -98,6 +98,18 @@ class ProductService {
       productData.notes = normNotes;
     }
 
+    // Normalize English notes (comma strings or arrays)
+    if (productData.translations && productData.translations.en && productData.translations.en.notes) {
+      const enNotes = {};
+      ['top', 'heart', 'base'].forEach((key) => {
+        const raw = productData.translations.en.notes[key];
+        if (typeof raw === 'string') enNotes[key] = raw.split(',').map((x) => x.trim()).filter(Boolean);
+        else if (Array.isArray(raw)) enNotes[key] = raw.map((x) => x.toString().trim()).filter(Boolean);
+        else enNotes[key] = [];
+      });
+      productData.translations.en.notes = enNotes;
+    }
+
     // Normalize Variants
     productData.variants = this.normalizeVariants(productData.variants, slug);
 
@@ -293,6 +305,18 @@ class ProductService {
         }
       });
       updateData.notes = normNotes;
+    }
+
+    // Normalize English notes (comma strings or arrays)
+    if (updateData.translations && updateData.translations.en && updateData.translations.en.notes) {
+      const enNotes = {};
+      ['top', 'heart', 'base'].forEach((key) => {
+        const raw = updateData.translations.en.notes[key];
+        if (typeof raw === 'string') enNotes[key] = raw.split(',').map((x) => x.trim()).filter(Boolean);
+        else if (Array.isArray(raw)) enNotes[key] = raw.map((x) => x.toString().trim()).filter(Boolean);
+        else enNotes[key] = [];
+      });
+      updateData.translations.en.notes = enNotes;
     }
 
     // Normalize Variants

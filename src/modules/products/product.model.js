@@ -105,6 +105,19 @@ const productSchema = new mongoose.Schema(
       trim: true,
       default: ''
     },
+    // English version of the content. The base fields (shortDescription, description, notes) hold the Arabic text.
+    translations: {
+      en: {
+        name: { type: String, trim: true, default: '' },
+        shortDescription: { type: String, trim: true, default: '' },
+        description: { type: String, trim: true, default: '' },
+        notes: {
+          top: [{ type: String, trim: true }],
+          heart: [{ type: String, trim: true }],
+          base: [{ type: String, trim: true }]
+        }
+      }
+    },
     fragranceFamily: {
       type: String,
       trim: true,

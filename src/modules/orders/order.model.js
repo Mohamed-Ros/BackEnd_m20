@@ -39,6 +39,11 @@ const orderItemSchema = new mongoose.Schema(
       type: Number,
       default: 0
     },
+    // Cost-table row used for this bottle at order time (bottle, oil, alcohol, rawShipping, box, card, marketing)
+    costRow: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null
+    },
     unitCost: {
       type: Number,
       default: 0

@@ -742,11 +742,39 @@ class OrderService {
     const prodCostMap = {};
     prodDocs.forEach((p) => { prodCostMap[String(p._id)] = p.costTable; });
 
+    const MATS = ['bottle', 'oil', 'alcohol', 'rawShipping', 'box', 'card'];
     const keys = ['manufacturing', 'packaging', 'marketing', 'shipping', 'operating', 'financial'];
     const byMethod = {};
+    const materials = { bottle: 0, oil: 0, alcohol: 0, rawShipping: 0, box: 0, card: 0 };
     const totals = { orders: 0, revenue: 0, manufacturing: 0, packaging: 0, marketing: 0, shipping: 0, operating: 0, financial: 0, totalCost: 0, netProfit: 0, warned: 0 };
 
     const rows = orders.map((o) => {
+      // Per-bottle detail: the row saved on the order, otherwise the current cost table (flagged as estimate)
+      let itemsEstimated = false;
+      const itemDetails = (o.items || []).map((it) => {
+        let row = it.costRow;
+        if (!row) {
+          itemsEstimated = true;
+          row = OrderService.getCostRow(settings, it.size, prodCostMap[String(it.product)]);
+        }
+        row = row || {};
+        const qty = it.quantity || 1;
+        const mats = {};
+        MATS.forEach((k) => { mats[k] = Number(row[k]) || 0; });
+        const cogsPerBottle = MATS.reduce((a, k) => a + mats[k], 0);
+        const marketingPerBottle = Number(row.marketing) || 0;
+        return {
+          productName: it.productName,
+          size: it.size,
+          quantity: qty,
+          price: Math.round(it.price || 0),
+          ...mats,
+          cogsPerBottle,
+          marketingPerBottle,
+          totalPerBottle: cogsPerBottle + marketingPerBottle,
+          totalForQty: (cogsPerBottle + marketingPerBottle) * qty
+        };
+      });
       const real = Math.round(Number(o.actualOutboundShippingCost ?? o.realShippingCost ?? 0));
       const hasStored = o.costBreakdown && o.costBreakdown.totalCost > 0;
       let cb;
@@ -784,6 +812,7 @@ class OrderService {
         keys.forEach((k) => { totals[k] += Number(cb[k]) || 0; });
         totals.totalCost += cb.totalCost;
         totals.netProfit += cb.netProfit;
+        itemDetails.forEach((d) => MATS.forEach((k) => { materials[k] += d[k] * d.quantity; }));
         if (cb.shippingCostWarning) totals.warned += 1;
         const m = o.paymentMethod || 'cod';
         const g = byMethod[m] || (byMethod[m] = { method: m, orders: 0, revenue: 0, feeCharged: 0, feeCost: 0, paid: 0, unpaid: 0 });
@@ -806,13 +835,27 @@ class OrderService {
         total: Math.round(o.total || 0),
         paymentFee: Math.round(o.paymentFee || 0),
         paymentStatus: o.paymentStatus,
+        customerPhone: o.customerPhone || o.customer?.phone || '',
+        address: [o.shippingAddress?.street, o.shippingAddress?.city, o.shippingAddress?.governorate].filter(Boolean).join('، '),
+        metroStation: o.metroPickup?.stationNameAr || o.metroPickup?.stationNameEn || '',
+        discount: Math.round(o.discount || 0),
+        couponCode: o.couponCode || '',
+        shippingFeeCharged: Math.round(o.shippingFeeCharged ?? o.shipping ?? 0),
+        shippingDiscount: Math.round(o.shippingDiscount || 0),
+        metroPickupFee: Math.round(o.metroPickupFee || 0),
         counted,
         estimated,
-        ...cb
+        itemsEstimated,
+        items: itemDetails,
+        ...cb,
+        // COGS = every direct material (bottle + oil + alcohol + raw shipping + box + card)
+        cogs: (Number(cb.manufacturing) || 0) + (Number(cb.packaging) || 0)
       };
     });
 
     totals.operatingPool = operatingPool;
+    totals.cogs = totals.manufacturing + totals.packaging;
+    totals.materials = materials;
     return { rows, totals, byPaymentMethod: Object.values(byMethod), truncated: orders.length >= 5000 };
   }
 
