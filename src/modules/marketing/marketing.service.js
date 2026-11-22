@@ -215,6 +215,97 @@ class MarketingService {
     return { start, end };
   }
 
+
+  /**
+   * Live storefront traffic overview (visits, page views, conversion, 7-day series, top viewed products)
+   */
+  static async getTrafficOverview() {
+    const TZ = 'Africa/Cairo';
+    const now = new Date();
+    const dayKey = (d) => new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(d); // YYYY-MM-DD
+    const todayKey = dayKey(now);
+    const since = new Date(now.getTime() - 8 * 24 * 60 * 60 * 1000);
+    const activeSince = new Date(now.getTime() - 5 * 60 * 1000);
+
+    const [daily, topRaw, activeAgg] = await Promise.all([
+      AnalyticsEvent.aggregate([
+        { $match: { eventType: 'page_view', createdAt: { $gte: since } } },
+        {
+          $group: {
+            _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: TZ } },
+            views: { $sum: 1 },
+            sessions: { $addToSet: '$sessionId' }
+          }
+        }
+      ]),
+      AnalyticsEvent.aggregate([
+        { $match: { eventType: { $in: ['view_content', 'add_to_cart'] }, productId: { $ne: null } } },
+        {
+          $group: {
+            _id: '$productId',
+            views: { $sum: { $cond: [{ $eq: ['$eventType', 'view_content'] }, 1, 0] } },
+            cartAdds: { $sum: { $cond: [{ $eq: ['$eventType', 'add_to_cart'] }, 1, 0] } }
+          }
+        },
+        { $sort: { views: -1, cartAdds: -1 } },
+        { $limit: 5 }
+      ]),
+      AnalyticsEvent.distinct('sessionId', { createdAt: { $gte: activeSince } })
+    ]);
+
+    const byDay = {};
+    daily.forEach((d) => { byDay[d._id] = { views: d.views, visits: d.sessions.length }; });
+
+    const series = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
+      const key = dayKey(d);
+      series.push({ date: key, visits: byDay[key]?.visits || 0 });
+    }
+
+    const today = byDay[todayKey] || { views: 0, visits: 0 };
+
+    // Orders placed today (Cairo calendar day)
+    const recentOrders = await Order.find({
+      createdAt: { $gte: new Date(now.getTime() - 36 * 60 * 60 * 1000) },
+      orderStatus: { $ne: 'cancelled' }
+    }).select('createdAt');
+    const ordersTodayCount = recentOrders.filter((o) => dayKey(o.createdAt) === todayKey).length;
+
+    const conversionRate = today.visits > 0
+      ? Number(((ordersTodayCount / today.visits) * 100).toFixed(1))
+      : 0;
+
+    const Product = require('../products/product.model');
+    const products = await Product.find({ _id: { $in: topRaw.map((t) => t._id) } })
+      .select('name fragranceFamily variants images');
+    const pMap = new Map(products.map((p) => [String(p._id), p]));
+    const topProducts = topRaw
+      .map((t) => {
+        const p = pMap.get(String(t._id));
+        if (!p) return null;
+        return {
+          _id: p._id,
+          name: p.name,
+          family: p.fragranceFamily || '',
+          price: p.variants?.[0]?.price || 0,
+          image: p.images?.[0]?.url || '',
+          views: t.views,
+          cartAdds: t.cartAdds
+        };
+      })
+      .filter(Boolean);
+
+    return {
+      todayVisits: today.visits,
+      todayPageViews: today.views,
+      conversionRate,
+      activeNow: activeAgg.length,
+      series,
+      topProducts
+    };
+  }
+
   /**
    * Main Marketing & Ads Analytics Dashboard Aggregation
    */

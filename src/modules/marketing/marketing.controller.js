@@ -23,6 +23,25 @@ class MarketingController {
   }
 
   /**
+   * Live storefront traffic overview
+   */
+  static async getTraffic(req, res, next) {
+    try {
+      const data = await MarketingService.getTrafficOverview();
+      return sendSuccess(
+        res,
+        200,
+        'Traffic overview retrieved successfully.',
+        SuccessCodes.FETCH_SUCCESS,
+        'MarketingController.getTraffic',
+        data
+      );
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
    * Get logged ad spend entries
    */
   static async getAdSpends(req, res, next) {

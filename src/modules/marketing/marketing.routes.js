@@ -12,6 +12,7 @@ router.use(protect);
 router.use(restrictTo('admin', 'inventory_manager'));
 
 router.get('/dashboard', MarketingController.getDashboard);
+router.get('/traffic', MarketingController.getTraffic);
 router.get('/ad-spend', MarketingController.getAdSpends);
 router.post('/ad-spend', restrictTo('admin'), MarketingController.createAdSpend);
 router.delete('/ad-spend/:id', restrictTo('admin'), MarketingController.deleteAdSpend);
