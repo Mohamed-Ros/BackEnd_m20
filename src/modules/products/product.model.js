@@ -163,6 +163,12 @@ const productSchema = new mongoose.Schema(
       default: 0,
       min: [0, 'Finished liquid stock cannot be negative']
     },
+    // Per-product cost overrides by size, e.g. { '50ml': { oil: 70 } }. Admin only (never sent to the storefront).
+    costTable: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+      select: false
+    },
     finishedLiquidCostPerGram: {
       type: Number,
       default: 0,

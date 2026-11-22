@@ -216,6 +216,43 @@ class ProductService {
   /**
    * Update product
    */
+  /**
+   * Admin: all products with their per-product cost overrides
+   */
+  static async getCostTables() {
+    return Product.find().select('name slug costTable').sort({ name: 1 }).lean();
+  }
+
+  /**
+   * Admin: save per-product cost overrides (only the fields that differ from the default table).
+   * Pass an empty object / null to reset the product to the default table.
+   */
+  static async setCostTable(id, costTable) {
+    const fields = ['bottle', 'oil', 'alcohol', 'rawShipping', 'box', 'card', 'marketing'];
+    const clean = {};
+    if (costTable && typeof costTable === 'object') {
+      for (const [size, row] of Object.entries(costTable)) {
+        if (!row || typeof row !== 'object') continue;
+        const r = {};
+        fields.forEach((f) => {
+          if (row[f] !== undefined && row[f] !== null && row[f] !== '' && !Number.isNaN(Number(row[f]))) {
+            r[f] = Math.max(0, Number(row[f]));
+          }
+        });
+        if (Object.keys(r).length) clean[size] = r;
+      }
+    }
+    const product = await Product.findByIdAndUpdate(
+      id,
+      { $set: { costTable: Object.keys(clean).length ? clean : null } },
+      { new: true }
+    ).select('name slug costTable').lean();
+    if (!product) {
+      throw new AppError('Product not found.', 404, ErrorCodes.PRODUCT_NOT_FOUND, 'ProductService.setCostTable');
+    }
+    return product;
+  }
+
   static async updateProduct(id, updateData) {
     const product = await Product.findById(id);
     if (!product) {

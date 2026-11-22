@@ -137,6 +137,24 @@ class ProductController {
   /**
    * Admin: Get low stock inventory alert
    */
+  static async getCostTables(req, res, next) {
+    try {
+      const products = await ProductService.getCostTables();
+      return sendSuccess(res, 200, 'Product cost tables retrieved.', SuccessCodes.FETCHED, 'ProductController.getCostTables', products);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async setCostTable(req, res, next) {
+    try {
+      const product = await ProductService.setCostTable(req.params.id, req.body?.costTable);
+      return sendSuccess(res, 200, 'Product cost table saved.', SuccessCodes.UPDATED || SuccessCodes.FETCHED, 'ProductController.setCostTable', product);
+    } catch (error) {
+      next(error);
+    }
+  }
+
   static async getLowStockProducts(req, res, next) {
     try {
       const threshold = parseInt(req.query.threshold, 10) || 5;

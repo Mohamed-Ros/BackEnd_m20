@@ -9,6 +9,9 @@ const router = express.Router();
 // Public Product Catalog Routes
 router.get('/', optionalProtect, ProductController.getAllProducts);
 router.get('/slug/:slug', optionalProtect, ProductController.getProductBySlug);
+// Admin cost tables (declared before '/:id' so they are not shadowed)
+router.get('/admin/cost-tables', protect, restrictTo('admin'), ProductController.getCostTables);
+router.put('/:id/cost-table', protect, restrictTo('admin'), ProductController.setCostTable);
 router.get('/:id', optionalProtect, ProductController.getProductById);
 
 // Admin Inventory & Management Routes

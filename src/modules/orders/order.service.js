@@ -180,7 +180,8 @@ class OrderService {
                                (Number(costDefaults.sticker) || 20) +
                                (Number(costDefaults.box) || 25) +
                                (Number(costDefaults.marketingPerBottle) || 20);
-      const tableRow = OrderService.getCostRow(settings, variant.size);
+      const prodCost = await Product.findById(product._id).select('costTable').lean();
+      const tableRow = OrderService.getCostRow(settings, variant.size, prodCost?.costTable);
       const itemUnitCost = tableRow
         ? OrderService.sumCostRow(tableRow)
         : Number((liquidCostPerUnit + pkgCostPerBottle).toFixed(2));
@@ -449,7 +450,7 @@ class OrderService {
   /**
    * Cost-table row for a bottle size (e.g. '50ml'), or null when the size is not configured
    */
-  static getCostRow(settings, size) {
+  static getCostRow(settings, size, productCostTable = null) {
     const table = settings.costTable;
     if (!table || !size) return null;
     const key = String(size).toLowerCase().replace(/\s+/g, '');
@@ -457,6 +458,13 @@ class OrderService {
     if (!row) return null;
     const plain = { ...(row.toObject ? row.toObject() : row) };
     if (plain.box === undefined && plain.bag !== undefined) plain.box = plain.bag; // older saved name
+    // Per-product overrides win field by field
+    const pRow = productCostTable && (productCostTable[key] || productCostTable[String(size)]);
+    if (pRow && typeof pRow === 'object') {
+      Object.keys(pRow).forEach((f) => {
+        if (pRow[f] !== undefined && pRow[f] !== null && !Number.isNaN(Number(pRow[f]))) plain[f] = Number(pRow[f]);
+      });
+    }
     return plain;
   }
 
@@ -728,6 +736,12 @@ class OrderService {
     const countedOrders = orders.filter((o) => !['cancelled', 'returned_from_shipping'].includes(o.orderStatus)).length;
     const operatingPerOrderAlloc = countedOrders > 0 ? operatingPool / countedOrders : 0;
 
+    // Per-product cost overrides (for estimating older orders)
+    const productIds = [...new Set(orders.flatMap((o) => (o.items || []).map((it) => String(it.product))))];
+    const prodDocs = productIds.length ? await Product.find({ _id: { $in: productIds } }).select('costTable').lean() : [];
+    const prodCostMap = {};
+    prodDocs.forEach((p) => { prodCostMap[String(p._id)] = p.costTable; });
+
     const keys = ['manufacturing', 'packaging', 'marketing', 'shipping', 'operating', 'financial'];
     const byMethod = {};
     const totals = { orders: 0, revenue: 0, manufacturing: 0, packaging: 0, marketing: 0, shipping: 0, operating: 0, financial: 0, totalCost: 0, netProfit: 0, warned: 0 };
@@ -749,7 +763,7 @@ class OrderService {
         estimated = true;
         cb = OrderService.buildCostBreakdown({
           settings,
-          items: (o.items || []).map((it) => ({ ...it, costRow: OrderService.getCostRow(settings, it.size) })),
+          items: (o.items || []).map((it) => ({ ...it, costRow: OrderService.getCostRow(settings, it.size, prodCostMap[String(it.product)]) })),
           subtotal: o.subtotal || 0,
           total: o.total || 0,
           realShipping: real,
