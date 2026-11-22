@@ -13,7 +13,7 @@ class MarketingController {
         res,
         200,
         'Marketing analytics dashboard retrieved successfully.',
-        SuccessCodes.FETCH_SUCCESS,
+        SuccessCodes.FETCHED,
         'MarketingController.getDashboard',
         data
       );
@@ -32,7 +32,7 @@ class MarketingController {
         res,
         200,
         'Traffic overview retrieved successfully.',
-        SuccessCodes.FETCH_SUCCESS,
+        SuccessCodes.FETCHED,
         'MarketingController.getTraffic',
         data
       );
@@ -51,7 +51,7 @@ class MarketingController {
         res,
         200,
         'Ad spend entries retrieved successfully.',
-        SuccessCodes.FETCH_SUCCESS,
+        SuccessCodes.FETCHED,
         'MarketingController.getAdSpends',
         spends
       );
