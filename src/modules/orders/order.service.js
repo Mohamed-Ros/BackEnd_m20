@@ -15,7 +15,7 @@ const { getBottleSpec } = require('../../utils/helpers/manufacturing');
 const { sendMetaCapiPurchase } = require('../../utils/helpers/metaCapi');
 const { generateOrderNumber, generateUserId } = require('../../utils/helpers/orderNumber');
 const { normalizePhone } = require('../../utils/helpers/phoneNormalizer');
-const { getGovernorateRate } = require('../../utils/helpers/governorates');
+const { getGovernorateRate, EGYPT_GOVERNORATES } = require('../../utils/helpers/governorates');
 const AppError = require('../../utils/errors/appError');
 const { ErrorCodes } = require('../../utils/errors/errorCodes');
 
@@ -180,7 +180,10 @@ class OrderService {
                                (Number(costDefaults.sticker) || 20) +
                                (Number(costDefaults.box) || 25) +
                                (Number(costDefaults.marketingPerBottle) || 20);
-      const itemUnitCost = Number((liquidCostPerUnit + pkgCostPerBottle).toFixed(2));
+      const tableRow = OrderService.getCostRow(settings, variant.size);
+      const itemUnitCost = tableRow
+        ? OrderService.sumCostRow(tableRow)
+        : Number((liquidCostPerUnit + pkgCostPerBottle).toFixed(2));
       const itemTotalCost = Number((itemUnitCost * item.quantity).toFixed(2));
       totalCogs += itemTotalCost;
 
@@ -193,6 +196,7 @@ class OrderService {
         price: effectiveUnitPrice,
         quantity: item.quantity,
         liquidGramsConsumed: itemGrams,
+        costRow: tableRow || null,
         unitCost: itemUnitCost,
         totalCost: itemTotalCost
       });
@@ -308,6 +312,14 @@ class OrderService {
       paymentFee,
       total: calculatedTotal,
       totalCogs: Number(totalCogs.toFixed(2)),
+      costBreakdown: OrderService.buildCostBreakdown({
+        settings,
+        items: validatedItems,
+        subtotal: calculatedSubtotal,
+        total: calculatedTotal,
+        realShipping: deliveryMethod === 'home_delivery' ? actualOutboundShippingCost : finalMetroFee,
+        paymentMethod: normPaymentMethod
+      }),
       inventoryDeducted: true,
       orderStatus: 'pending',
       paymentStatus: 'pending',
@@ -412,6 +424,94 @@ class OrderService {
   }
 
   /**
+   * Look up an explicitly configured per-region cost (by id / English / Arabic name). Returns null if not set.
+   */
+  static lookupRegionCost(map, governorate) {
+    if (!map || !governorate) return null;
+    const entries = map instanceof Map ? [...map.entries()] : Object.entries(map);
+    if (!entries.length) return null;
+    const raw = String(governorate).trim().toLowerCase();
+    const gov = EGYPT_GOVERNORATES.find((g) =>
+      [g.id, g.nameEn, g.nameAr].some((n) => n.toLowerCase() === raw) ||
+      raw.includes(g.nameEn.toLowerCase()) || raw.includes(g.nameAr)
+    );
+    const names = new Set([raw]);
+    if (gov) [gov.id, gov.nameEn, gov.nameAr].forEach((n) => names.add(n.toLowerCase()));
+    const hit = entries.find(([k]) => names.has(String(k).toLowerCase()));
+    return hit ? Math.round(Number(hit[1])) : null;
+  }
+
+  /**
+   * Cost-table row for a bottle size (e.g. '50ml'), or null when the size is not configured
+   */
+  static getCostRow(settings, size) {
+    const table = settings.costTable;
+    if (!table || !size) return null;
+    const key = String(size).toLowerCase().replace(/\s+/g, '');
+    const row = table[key] || table[String(size)] || null;
+    return row ? { ...(row.toObject ? row.toObject() : row) } : null;
+  }
+
+  static sumCostRow(row) {
+    return ['bottle', 'oil', 'alcohol', 'rawShipping', 'bag', 'card', 'marketing']
+      .reduce((a, f) => a + (Number(row[f]) || 0), 0);
+  }
+
+  /**
+   * Split an order into manufacturing / marketing / shipping / packaging / operating / financial costs
+   */
+  static buildCostBreakdown({ settings, items, subtotal, total, realShipping, paymentMethod }) {
+    const cd = settings.costDefaults || {};
+    const packagingPerUnit = (Number(cd.bottleWithCapSprayer) || 45) + (Number(cd.sticker) || 20) + (Number(cd.box) || 25);
+    const marketingPerUnit = Number(cd.marketingPerBottle) || 20;
+    let manufacturing = 0;
+    let packaging = 0;
+    let marketing = 0;
+    items.forEach((it) => {
+      const qty = it.quantity || 1;
+      const row = it.costRow;
+      if (row) {
+        manufacturing += ((row.oil || 0) + (row.alcohol || 0) + (row.rawShipping || 0)) * qty;
+        packaging += ((row.bottle || 0) + (row.bag || 0) + (row.card || 0)) * qty;
+        marketing += (row.marketing || 0) * qty;
+      } else {
+        packaging += packagingPerUnit * qty;
+        marketing += marketingPerUnit * qty;
+        manufacturing += Math.max(0, (it.unitCost || 0) - packagingPerUnit - marketingPerUnit) * qty;
+      }
+    });
+    const oc = settings.orderCosts || {};
+    const operating = (Number(oc.operatingPerOrder) || 0) + ((Number(oc.operatingPercent) || 0) / 100) * total;
+    const pm = String(paymentMethod || '').toLowerCase();
+    const pay = settings.payments || {};
+    let feePercent = 0;
+    let feeFixed = 0;
+    if (pm === 'vodafone_cash') feePercent = Number(pay.vodafoneCash?.feePercent) || 0;
+    else if (pm === 'instapay') feePercent = Number(pay.instaPay?.feePercent) || 0;
+    else if (pm === 'fawaterk' || pm === 'card') feePercent = Number(pay.fawaterk?.feePercent) || 0;
+    else feeFixed = Number(pay.cod?.feeAmount) || 0;
+    const financial = (feePercent / 100) * total + feeFixed;
+
+    const r = (n) => Math.round(n);
+    const shipping = r(realShipping);
+    const totalCost = r(manufacturing) + r(packaging) + r(marketing) + shipping + r(operating) + r(financial);
+    const warnPct = Number(settings.shipping?.costWarnPercent ?? 30);
+    const shippingCostPercent = subtotal > 0 ? Number(((shipping / subtotal) * 100).toFixed(1)) : 0;
+    return {
+      manufacturing: r(manufacturing),
+      marketing: r(marketing),
+      shipping,
+      packaging: r(packaging),
+      operating: r(operating),
+      financial: r(financial),
+      totalCost,
+      netProfit: r(total) - totalCost,
+      shippingCostPercent,
+      shippingCostWarning: warnPct > 0 && shippingCostPercent > warnPct
+    };
+  }
+
+  /**
    * Helper to calculate shipping fee and real internal shipping cost from Settings
    * Strict Whole Integers only (Origin: Giza)
    */
@@ -429,7 +529,7 @@ class OrderService {
 
     const freeGovs = settings.shipping?.freeShippingGovernorates || [];
     const govRates = settings.shipping?.governorateRates || {};
-    const realCostMap = settings.shipping?.realCostMap || govRates;
+    const realCostMap = settings.shipping?.realCostMap || {};
 
     const isFree = governorate && freeGovs.some(g => g.toLowerCase() === governorate.toLowerCase());
     
@@ -438,7 +538,10 @@ class OrderService {
     const shippingFee = isFree ? 0 : baseRate;
 
     // Carrier actual outbound shipping cost defaults to the whole-number governorate rate
-    const actualOutboundShippingCost = Math.round(getGovernorateRate(governorate, realCostMap));
+    const explicitReal = OrderService.lookupRegionCost(realCostMap, governorate);
+    const actualOutboundShippingCost = explicitReal !== null
+      ? explicitReal
+      : Math.round(Number(settings.shipping?.defaultRealCost ?? 50));
 
     return { 
       shippingFee, 

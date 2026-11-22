@@ -243,7 +243,13 @@ const getFinanceOverview = async (query = {}) => {
   let totalCogs = 0;
   let totalOutboundShippingOnOrders = 0;
 
+  const costTotals = { manufacturing: 0, packaging: 0, marketing: 0, shipping: 0, operating: 0, financial: 0, warnedOrders: 0 };
   orders.forEach((order) => {
+    const cb = order.costBreakdown;
+    if (cb) {
+      Object.keys(costTotals).forEach((k) => { if (k !== 'warnedOrders') costTotals[k] += Number(cb[k]) || 0; });
+      if (cb.shippingCostWarning) costTotals.warnedOrders += 1;
+    }
     grossSales += Math.round(order.total || 0);
     // Outbound carrier shipping expense for valid orders
     const outboundCost = Math.round(order.actualOutboundShippingCost ?? order.realShippingCost ?? 0);
@@ -425,6 +431,7 @@ const getFinanceOverview = async (query = {}) => {
 
   return {
     dateRange: range ? { start: range.start, end: range.end } : { preset: query.preset || 'all' },
+    orderCostBreakdown: costTotals,
     summary: {
       grossSales: Math.round(grossSales),
       cogs: Math.round(totalCogs),

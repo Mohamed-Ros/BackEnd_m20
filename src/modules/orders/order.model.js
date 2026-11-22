@@ -217,6 +217,19 @@ const orderSchema = new mongoose.Schema(
       type: Number,
       default: 0
     },
+    // Per-order cost split (EGP): manufacturing, marketing, shipping, packaging, operating, financial
+    costBreakdown: {
+      manufacturing: { type: Number, default: 0 },
+      marketing: { type: Number, default: 0 },
+      shipping: { type: Number, default: 0 },
+      packaging: { type: Number, default: 0 },
+      operating: { type: Number, default: 0 },
+      financial: { type: Number, default: 0 },
+      totalCost: { type: Number, default: 0 },
+      netProfit: { type: Number, default: 0 },
+      shippingCostPercent: { type: Number, default: 0 },
+      shippingCostWarning: { type: Boolean, default: false }
+    },
     inventoryDeducted: {
       type: Boolean,
       default: false

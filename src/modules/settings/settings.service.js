@@ -157,6 +157,12 @@ class SettingsService {
         if (data.shipping.metroPickupCustomerFee !== undefined) {
           settings.shipping.metroPickupCustomerFee = Math.round(Number(data.shipping.metroPickupCustomerFee));
         }
+        if (data.shipping.defaultRealCost !== undefined) {
+          settings.shipping.defaultRealCost = Math.max(0, Math.round(Number(data.shipping.defaultRealCost) || 0));
+        }
+        if (data.shipping.costWarnPercent !== undefined) {
+          settings.shipping.costWarnPercent = Math.min(100, Math.max(0, Number(data.shipping.costWarnPercent) || 0));
+        }
         if (data.shipping.metroPickupRealCost !== undefined) {
           settings.shipping.metroPickupRealCost = Math.round(Number(data.shipping.metroPickupRealCost));
         }
@@ -187,6 +193,25 @@ class SettingsService {
             ...data.payments.fawaterk
           };
         }
+      }
+
+      if (data.costTable && typeof data.costTable === 'object') {
+        const fields = ['bottle', 'oil', 'alcohol', 'rawShipping', 'bag', 'card', 'marketing'];
+        const clean = {};
+        for (const [size, row] of Object.entries(data.costTable)) {
+          if (!row || typeof row !== 'object') continue;
+          clean[size] = {};
+          fields.forEach((f) => { clean[size][f] = Math.max(0, Number(row[f]) || 0); });
+        }
+        settings.costTable = clean;
+        settings.markModified('costTable');
+      }
+
+      if (data.orderCosts) {
+        settings.orderCosts = {
+          operatingPerOrder: Math.max(0, Number(data.orderCosts.operatingPerOrder) || 0),
+          operatingPercent: Math.max(0, Number(data.orderCosts.operatingPercent) || 0)
+        };
       }
 
       if (data.storeStatus) {

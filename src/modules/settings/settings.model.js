@@ -61,10 +61,20 @@ const settingsSchema = new mongoose.Schema(
         of: Number,
         default: DEFAULT_GOVERNORATE_RATES
       },
+      // Carrier's real cost per governorate. Regions not listed fall back to defaultRealCost.
       realCostMap: {
         type: Map,
         of: Number,
-        default: DEFAULT_GOVERNORATE_RATES
+        default: {}
+      },
+      defaultRealCost: {
+        type: Number,
+        default: 50
+      },
+      // Flag an order when real shipping cost exceeds this % of the products subtotal
+      costWarnPercent: {
+        type: Number,
+        default: 30
       },
       metroPickupCustomerFee: {
         type: Number,
@@ -111,6 +121,21 @@ const settingsSchema = new mongoose.Schema(
       box: { type: Number, default: 25 },
       marketingPerBottle: { type: Number, default: 20 },
       defaultLiquidDensity: { type: Number, default: 0.86 }
+    },
+    // Cost per bottle by size (EGP). Order costs are calculated from this table.
+    // manufacturing = oil + alcohol + rawShipping | packaging = bottle + bag + card | marketing = marketing
+    costTable: {
+      type: mongoose.Schema.Types.Mixed,
+      default: () => ({
+        '30ml': { bottle: 45, oil: 35, alcohol: 10, rawShipping: 10, bag: 45, card: 5, marketing: 25 },
+        '50ml': { bottle: 55, oil: 55, alcohol: 10, rawShipping: 10, bag: 45, card: 5, marketing: 25 },
+        '100ml': { bottle: 60, oil: 100, alcohol: 20, rawShipping: 10, bag: 45, card: 5, marketing: 25 }
+      })
+    },
+    // Per-order overhead used in the order cost breakdown
+    orderCosts: {
+      operatingPerOrder: { type: Number, default: 0 },
+      operatingPercent: { type: Number, default: 0 }
     },
     // Official M20 Gram-Based Manufacturing Constants
     manufacturing: {
