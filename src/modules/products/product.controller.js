@@ -1,6 +1,10 @@
 const ProductService = require('./product.service');
 const { sendSuccess } = require('../../utils/responses/responseHandler');
-const { SuccessCodes } = require('../../utils/errors/errorCodes');
+const { SuccessCodes, ErrorCodes } = require('../../utils/errors/errorCodes');
+const AppError = require('../../utils/errors/appError');
+
+// Hidden ("inactive") products are visible to admins only; the public store sees active products.
+const isAdminUser = (req) => !!req.user && ['admin', 'superadmin'].includes(req.user.role);
 
 class ProductController {
   /**
@@ -28,7 +32,8 @@ class ProductController {
    */
   static async getAllProducts(req, res, next) {
     try {
-      const result = await ProductService.getAllProducts(req.query);
+      const query = isAdminUser(req) ? req.query : { ...req.query, active: 'true' };
+      const result = await ProductService.getAllProducts(query);
 
       return sendSuccess(
         res,
@@ -49,6 +54,9 @@ class ProductController {
   static async getProductBySlug(req, res, next) {
     try {
       const product = await ProductService.getProductBySlug(req.params.slug);
+      if (product.active === false && !isAdminUser(req)) {
+        return next(new AppError('Product not found.', 404, ErrorCodes.PRODUCT_NOT_FOUND, 'ProductController.getProductBySlug'));
+      }
 
       return sendSuccess(
         res,
@@ -69,6 +77,9 @@ class ProductController {
   static async getProductById(req, res, next) {
     try {
       const product = await ProductService.getProductById(req.params.id);
+      if (product.active === false && !isAdminUser(req)) {
+        return next(new AppError('Product not found.', 404, ErrorCodes.PRODUCT_NOT_FOUND, 'ProductController.getProductById'));
+      }
 
       return sendSuccess(
         res,

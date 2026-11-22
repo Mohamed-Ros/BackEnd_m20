@@ -2,14 +2,14 @@ const express = require('express');
 const ProductController = require('./product.controller');
 const validate = require('../../middleware/validation');
 const { createProductSchema, updateProductSchema } = require('./product.validation');
-const { protect, restrictTo } = require('../../middleware/auth');
+const { protect, optionalProtect, restrictTo } = require('../../middleware/auth');
 
 const router = express.Router();
 
 // Public Product Catalog Routes
-router.get('/', ProductController.getAllProducts);
-router.get('/slug/:slug', ProductController.getProductBySlug);
-router.get('/:id', ProductController.getProductById);
+router.get('/', optionalProtect, ProductController.getAllProducts);
+router.get('/slug/:slug', optionalProtect, ProductController.getProductBySlug);
+router.get('/:id', optionalProtect, ProductController.getProductById);
 
 // Admin Inventory & Management Routes
 router.get('/admin/low-stock', protect, restrictTo('admin'), ProductController.getLowStockProducts);
