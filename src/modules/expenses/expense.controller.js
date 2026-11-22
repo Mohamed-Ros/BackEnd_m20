@@ -28,6 +28,15 @@ const create = async (req, res, next) => {
   }
 };
 
+const update = async (req, res, next) => {
+  try {
+    const expense = await expenseService.updateExpense(req.params.id, req.body, req.user?._id);
+    return sendResponse(res, 200, 'Expense updated successfully', expense);
+  } catch (err) {
+    next(err);
+  }
+};
+
 const deleteExp = async (req, res, next) => {
   try {
     const result = await expenseService.deleteExpense(req.params.id);
@@ -50,6 +59,7 @@ module.exports = {
   getAll,
   getById,
   create,
+  update,
   deleteExp,
   getSummary
 };

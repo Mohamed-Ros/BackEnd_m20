@@ -10,6 +10,8 @@ router.get('/', expenseController.getAll);
 router.get('/summary', expenseController.getSummary);
 router.get('/:id', expenseController.getById);
 router.post('/', expenseController.create);
+router.put('/:id', expenseController.update);
+router.patch('/:id', expenseController.update);
 router.delete('/:id', expenseController.deleteExp);
 
 module.exports = router;

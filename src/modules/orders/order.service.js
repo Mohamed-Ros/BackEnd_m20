@@ -454,11 +454,14 @@ class OrderService {
     if (!table || !size) return null;
     const key = String(size).toLowerCase().replace(/\s+/g, '');
     const row = table[key] || table[String(size)] || null;
-    return row ? { ...(row.toObject ? row.toObject() : row) } : null;
+    if (!row) return null;
+    const plain = { ...(row.toObject ? row.toObject() : row) };
+    if (plain.box === undefined && plain.bag !== undefined) plain.box = plain.bag; // older saved name
+    return plain;
   }
 
   static sumCostRow(row) {
-    return ['bottle', 'oil', 'alcohol', 'rawShipping', 'bag', 'card', 'marketing']
+    return ['bottle', 'oil', 'alcohol', 'rawShipping', 'box', 'card', 'marketing']
       .reduce((a, f) => a + (Number(row[f]) || 0), 0);
   }
 
@@ -477,7 +480,7 @@ class OrderService {
       const row = it.costRow;
       if (row) {
         manufacturing += ((row.oil || 0) + (row.alcohol || 0) + (row.rawShipping || 0)) * qty;
-        packaging += ((row.bottle || 0) + (row.bag || 0) + (row.card || 0)) * qty;
+        packaging += ((row.bottle || 0) + (row.box || 0) + (row.card || 0)) * qty;
         marketing += (row.marketing || 0) * qty;
       } else {
         packaging += packagingPerUnit * qty;
@@ -715,6 +718,16 @@ class OrderService {
       .limit(5000)
       .lean();
 
+    // Real operating expenses (from the Expenses page) in the same period, spread evenly over the orders.
+    // Marketing is excluded (already in the per-bottle cost table) and Transportation (shipping is per order).
+    const Expense = require('../expenses/expense.model');
+    const expFilter = { category: { $nin: ['Marketing', 'Transportation'] } };
+    if (filter.createdAt) expFilter.date = filter.createdAt;
+    const expRows = await Expense.find(expFilter).select('amount').lean();
+    const operatingPool = Math.round(expRows.reduce((a, e) => a + (e.amount || 0), 0));
+    const countedOrders = orders.filter((o) => !['cancelled', 'returned_from_shipping'].includes(o.orderStatus)).length;
+    const operatingPerOrderAlloc = countedOrders > 0 ? operatingPool / countedOrders : 0;
+
     const keys = ['manufacturing', 'packaging', 'marketing', 'shipping', 'operating', 'financial'];
     const byMethod = {};
     const totals = { orders: 0, revenue: 0, manufacturing: 0, packaging: 0, marketing: 0, shipping: 0, operating: 0, financial: 0, totalCost: 0, netProfit: 0, warned: 0 };
@@ -744,6 +757,13 @@ class OrderService {
         });
       }
       const counted = !['cancelled', 'returned_from_shipping'].includes(o.orderStatus);
+      // operating = fixed per-order setting + share of the real operating expenses
+      if (counted && operatingPerOrderAlloc > 0) {
+        cb.operating = Math.round((cb.operating || 0) + operatingPerOrderAlloc);
+        cb.totalCost = ['manufacturing', 'packaging', 'marketing', 'shipping', 'operating', 'financial']
+          .reduce((a, k) => a + (Number(cb[k]) || 0), 0);
+        cb.netProfit = Math.round(o.total || 0) - cb.totalCost;
+      }
       if (counted) {
         totals.orders += 1;
         totals.revenue += Math.round(o.total || 0);
@@ -778,6 +798,7 @@ class OrderService {
       };
     });
 
+    totals.operatingPool = operatingPool;
     return { rows, totals, byPaymentMethod: Object.values(byMethod), truncated: orders.length >= 5000 };
   }
 

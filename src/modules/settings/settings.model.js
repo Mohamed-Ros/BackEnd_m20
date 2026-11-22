@@ -129,9 +129,9 @@ const settingsSchema = new mongoose.Schema(
     costTable: {
       type: mongoose.Schema.Types.Mixed,
       default: () => ({
-        '30ml': { bottle: 45, oil: 35, alcohol: 10, rawShipping: 10, bag: 45, card: 5, marketing: 25 },
-        '50ml': { bottle: 55, oil: 55, alcohol: 10, rawShipping: 10, bag: 45, card: 5, marketing: 25 },
-        '100ml': { bottle: 60, oil: 100, alcohol: 20, rawShipping: 10, bag: 45, card: 5, marketing: 25 }
+        '30ml': { bottle: 45, oil: 35, alcohol: 10, rawShipping: 10, box: 45, card: 5, marketing: 25 },
+        '50ml': { bottle: 55, oil: 55, alcohol: 10, rawShipping: 10, box: 45, card: 5, marketing: 25 },
+        '100ml': { bottle: 60, oil: 100, alcohol: 20, rawShipping: 10, box: 45, card: 5, marketing: 25 }
       })
     },
     // Per-order overhead used in the order cost breakdown

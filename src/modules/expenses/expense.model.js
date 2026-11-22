@@ -27,6 +27,9 @@ const expenseSchema = new mongoose.Schema(
         'Packaging_Supplies',
         'Utilities',
         'Salaries',
+        'Rent',
+        'Software',
+        'Maintenance',
         'Other'
       ],
       default: 'Other',

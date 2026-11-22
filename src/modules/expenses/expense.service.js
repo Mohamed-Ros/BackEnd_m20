@@ -81,6 +81,60 @@ const createExpense = async (data, userId) => {
   return expense;
 };
 
+const updateExpense = async (id, data, userId) => {
+  const expense = await Expense.findById(id);
+  if (!expense) throw new AppError('Expense record not found', 404);
+
+  const newAmount = data.amount !== undefined ? Number(data.amount) : expense.amount;
+  if (!newAmount || newAmount <= 0) throw new AppError('Expense amount must be greater than 0', 400);
+
+  const newAccountId = data.paymentAccountId !== undefined ? (data.paymentAccountId || null) : (expense.paymentAccount ? String(expense.paymentAccount) : null);
+  const oldAccountId = expense.paymentAccount ? String(expense.paymentAccount) : null;
+  const title = data.title !== undefined ? String(data.title).trim() : expense.title;
+
+  // Keep the treasury in sync: give the old amount back, take the new amount out
+  if (oldAccountId !== (newAccountId ? String(newAccountId) : null) || newAmount !== expense.amount) {
+    if (oldAccountId) {
+      const oldAcc = await CashAccount.findById(oldAccountId);
+      if (oldAcc) {
+        oldAcc.balance += expense.amount;
+        oldAcc.transactions.push({
+          type: 'MANUAL_ADJUSTMENT', amount: expense.amount, balanceAfter: oldAcc.balance,
+          description: `Edit of expense ${expense.expenseNumber}: previous amount returned`, date: new Date(), createdBy: userId
+        });
+        await oldAcc.save();
+      }
+    }
+    if (newAccountId) {
+      const newAcc = await CashAccount.findById(newAccountId);
+      if (newAcc) {
+        newAcc.balance -= newAmount;
+        newAcc.transactions.push({
+          type: 'EXPENSE', amount: -newAmount, balanceAfter: newAcc.balance,
+          description: `Operating expense: ${title} (${data.category || expense.category})`, date: new Date(), createdBy: userId
+        });
+        await newAcc.save();
+        expense.paymentAccount = newAcc._id;
+        expense.paymentAccountName = newAcc.name;
+      } else {
+        expense.paymentAccount = null;
+        expense.paymentAccountName = '';
+      }
+    } else {
+      expense.paymentAccount = null;
+      expense.paymentAccountName = '';
+    }
+  }
+
+  expense.title = title;
+  expense.amount = newAmount;
+  if (data.category) expense.category = data.category;
+  if (data.date) expense.date = data.date;
+  if (data.notes !== undefined) expense.notes = data.notes;
+  await expense.save();
+  return expense;
+};
+
 const deleteExpense = async (id) => {
   const expense = await Expense.findById(id);
   if (!expense) {
@@ -136,6 +190,7 @@ module.exports = {
   getAllExpenses,
   getExpenseById,
   createExpense,
+  updateExpense,
   deleteExpense,
   getExpensesSummary
 };

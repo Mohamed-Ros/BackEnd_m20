@@ -203,12 +203,12 @@ class SettingsService {
       }
 
       if (data.costTable && typeof data.costTable === 'object') {
-        const fields = ['bottle', 'oil', 'alcohol', 'rawShipping', 'bag', 'card', 'marketing'];
+        const fields = ['bottle', 'oil', 'alcohol', 'rawShipping', 'box', 'card', 'marketing'];
         const clean = {};
         for (const [size, row] of Object.entries(data.costTable)) {
           if (!row || typeof row !== 'object') continue;
           clean[size] = {};
-          fields.forEach((f) => { clean[size][f] = Math.max(0, Number(row[f]) || 0); });
+          fields.forEach((f) => { clean[size][f] = Math.max(0, Number(f === 'box' ? (row.box ?? row.bag) : row[f]) || 0); });
         }
         settings.costTable = clean;
         settings.markModified('costTable');
