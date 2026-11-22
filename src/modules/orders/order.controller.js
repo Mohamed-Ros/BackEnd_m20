@@ -183,6 +183,15 @@ class OrderController {
   /**
    * Admin: Get all orders
    */
+  static async getLedger(req, res, next) {
+    try {
+      const result = await OrderService.getLedger(req.query);
+      return sendSuccess(res, 200, 'Orders ledger retrieved successfully.', SuccessCodes.FETCHED, 'OrderController.getLedger', result);
+    } catch (error) {
+      next(error);
+    }
+  }
+
   static async getAllOrders(req, res, next) {
     try {
       const result = await OrderService.getAllOrders(req.query);

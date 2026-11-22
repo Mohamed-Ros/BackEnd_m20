@@ -51,7 +51,7 @@ const cashAccountSchema = new mongoose.Schema(
     type: {
       type: String,
       required: true,
-      enum: ['cash', 'digital_wallet', 'bank', 'online_gateway', 'other'],
+      enum: ['cash', 'digital_wallet', 'bank', 'online_gateway', 'operating', 'other'],
       default: 'cash'
     },
     accountIdentifier: {

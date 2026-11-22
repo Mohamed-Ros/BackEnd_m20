@@ -246,10 +246,15 @@ class OrderService {
       : 0;
     const finalMetroFee = deliveryMethod === 'metro_pickup' ? metroPickupFee : 0;
     const totalShippingOrMetro = deliveryMethod === 'metro_pickup' ? finalMetroFee : shippingFeeCharged;
-    const paymentFee = 0;
     const normPaymentMethod = (paymentMethod || 'cod').toLowerCase();
 
-    const calculatedTotal = Math.max(0, calculatedSubtotal - discount + totalShippingOrMetro);
+    // Payment gateway fee (e.g. 2.4%) is added on top of the order and rounded to the nearest whole EGP
+    const orderBeforeFee = Math.max(0, calculatedSubtotal - discount + totalShippingOrMetro);
+    const isGateway = ['fawaterk', 'card'].includes(normPaymentMethod);
+    const gatewayPercent = isGateway ? Number(settings.payments?.fawaterk?.feePercent ?? 2.4) : 0;
+    const paymentFee = isGateway ? Math.round(orderBeforeFee * gatewayPercent / 100) : 0;
+
+    const calculatedTotal = orderBeforeFee + paymentFee;
     const orderNumber = generateOrderNumber();
 
     // Marketing Attribution Normalization
@@ -685,6 +690,97 @@ class OrderService {
   /**
    * Admin: Get all orders with filter
    */
+  /**
+   * Orders ledger: every order with its cost split and net profit, plus totals.
+   * Uses the stored breakdown; older orders without one are estimated from the current cost table.
+   */
+  static async getLedger(query = {}) {
+    const settings = await SettingsService.getSettings();
+    const filter = {};
+    if (query.from || query.to) {
+      filter.createdAt = {};
+      if (query.from) filter.createdAt.$gte = new Date(query.from);
+      if (query.to) {
+        const to = new Date(query.to);
+        to.setHours(23, 59, 59, 999);
+        filter.createdAt.$lte = to;
+      }
+    }
+    if (query.orderStatus) filter.orderStatus = query.orderStatus;
+    if (query.search) filter.orderNumber = { $regex: String(query.search).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };
+
+    const orders = await Order.find(filter)
+      .populate('customer', 'name phone')
+      .sort({ createdAt: -1 })
+      .limit(5000)
+      .lean();
+
+    const keys = ['manufacturing', 'packaging', 'marketing', 'shipping', 'operating', 'financial'];
+    const byMethod = {};
+    const totals = { orders: 0, revenue: 0, manufacturing: 0, packaging: 0, marketing: 0, shipping: 0, operating: 0, financial: 0, totalCost: 0, netProfit: 0, warned: 0 };
+
+    const rows = orders.map((o) => {
+      const real = Math.round(Number(o.actualOutboundShippingCost ?? o.realShippingCost ?? 0));
+      const hasStored = o.costBreakdown && o.costBreakdown.totalCost > 0;
+      let cb;
+      let estimated = false;
+      if (hasStored) {
+        cb = { ...o.costBreakdown, shipping: real };
+        cb.totalCost = ['manufacturing', 'packaging', 'marketing', 'shipping', 'operating', 'financial']
+          .reduce((a, k) => a + (Number(cb[k]) || 0), 0);
+        cb.netProfit = Math.round(o.total || 0) - cb.totalCost;
+        cb.shippingCostPercent = o.subtotal > 0 ? Number(((real / o.subtotal) * 100).toFixed(1)) : 0;
+        cb.shippingCostWarning = Number(settings.shipping?.costWarnPercent ?? 30) > 0 &&
+          cb.shippingCostPercent > Number(settings.shipping?.costWarnPercent ?? 30);
+      } else {
+        estimated = true;
+        cb = OrderService.buildCostBreakdown({
+          settings,
+          items: (o.items || []).map((it) => ({ ...it, costRow: OrderService.getCostRow(settings, it.size) })),
+          subtotal: o.subtotal || 0,
+          total: o.total || 0,
+          realShipping: real,
+          paymentMethod: o.paymentMethod
+        });
+      }
+      const counted = !['cancelled', 'returned_from_shipping'].includes(o.orderStatus);
+      if (counted) {
+        totals.orders += 1;
+        totals.revenue += Math.round(o.total || 0);
+        keys.forEach((k) => { totals[k] += Number(cb[k]) || 0; });
+        totals.totalCost += cb.totalCost;
+        totals.netProfit += cb.netProfit;
+        if (cb.shippingCostWarning) totals.warned += 1;
+        const m = o.paymentMethod || 'cod';
+        const g = byMethod[m] || (byMethod[m] = { method: m, orders: 0, revenue: 0, feeCharged: 0, feeCost: 0, paid: 0, unpaid: 0 });
+        g.orders += 1;
+        g.revenue += Math.round(o.total || 0);
+        g.feeCharged += Math.round(o.paymentFee || 0);
+        g.feeCost += Number(cb.financial) || 0;
+        if (o.paymentStatus === 'paid') g.paid += Math.round(o.total || 0); else g.unpaid += Math.round(o.total || 0);
+      }
+      return {
+        _id: o._id,
+        orderNumber: o.orderNumber,
+        createdAt: o.createdAt,
+        customerName: o.customer?.name || '',
+        orderStatus: o.orderStatus,
+        paymentMethod: o.paymentMethod,
+        governorate: o.shippingAddress?.governorate || (o.deliveryMethod === 'metro_pickup' ? 'Metro' : ''),
+        deliveryMethod: o.deliveryMethod,
+        subtotal: Math.round(o.subtotal || 0),
+        total: Math.round(o.total || 0),
+        paymentFee: Math.round(o.paymentFee || 0),
+        paymentStatus: o.paymentStatus,
+        counted,
+        estimated,
+        ...cb
+      };
+    });
+
+    return { rows, totals, byPaymentMethod: Object.values(byMethod), truncated: orders.length >= 5000 };
+  }
+
   static async getAllOrders(query = {}) {
     const page = parseInt(query.page, 10) || 1;
     const limit = parseInt(query.limit, 10) || 20;

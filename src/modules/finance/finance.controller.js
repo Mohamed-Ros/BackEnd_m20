@@ -83,6 +83,15 @@ const adjustBalance = async (req, res, next) => {
   }
 };
 
+const transfer = async (req, res, next) => {
+  try {
+    const result = await financeService.transferBetweenAccounts(req.body, req.user?._id);
+    return sendResponse(res, 200, 'Transfer completed successfully', result);
+  } catch (err) {
+    next(err);
+  }
+};
+
 const getMovements = async (req, res, next) => {
   try {
     const movements = await financeService.getStockMovements(req.query);
@@ -120,6 +129,7 @@ module.exports = {
   createAccount,
   updateAccount,
   adjustBalance,
+  transfer,
   getMovements,
   getCostSettings,
   updateCostSettings

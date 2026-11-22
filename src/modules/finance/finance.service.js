@@ -23,8 +23,58 @@ const ensureDefaultAccounts = async () => {
   }
 };
 
+// A dedicated wallet that holds the operating-expenses budget (pay expenses from it)
+const ensureOperatingAccount = async () => {
+  const exists = await CashAccount.findOne({ type: 'operating' });
+  if (!exists) {
+    await CashAccount.create({ name: 'Operating Expenses', type: 'operating', accountIdentifier: 'Operating budget', balance: 0 });
+  }
+};
+
+/**
+ * Move money between two accounts (wallet <-> wallet, or wallet <-> operating-expenses wallet)
+ */
+const transferBetweenAccounts = async ({ fromId, toId, amount, note = '' }, userId) => {
+  const amt = Math.round(Number(amount) * 100) / 100;
+  if (!amt || amt <= 0) throw new AppError('Transfer amount must be greater than 0', 400);
+  if (!fromId || !toId || String(fromId) === String(toId)) {
+    throw new AppError('Choose two different accounts', 400);
+  }
+  const [from, to] = await Promise.all([CashAccount.findById(fromId), CashAccount.findById(toId)]);
+  if (!from || !to) throw new AppError('Cash account not found', 404);
+  if (!from.active || !to.active) throw new AppError('Cannot transfer from/to an inactive account', 400);
+  if ((from.balance || 0) < amt) {
+    throw new AppError(`Insufficient balance in "${from.name}" (${from.balance || 0} EGP)`, 400);
+  }
+
+  const ref = `TRF-${Date.now()}`;
+  const date = new Date();
+  from.balance -= amt;
+  from.transactions.push({
+    type: 'TRANSFER', amount: -amt, balanceAfter: from.balance, referenceId: ref, referenceType: 'Transfer',
+    description: `Transfer to ${to.name}${note ? ` - ${note}` : ''}`, date, createdBy: userId
+  });
+  to.balance = (to.balance || 0) + amt;
+  to.transactions.push({
+    type: 'TRANSFER', amount: amt, balanceAfter: to.balance, referenceId: ref, referenceType: 'Transfer',
+    description: `Transfer from ${from.name}${note ? ` - ${note}` : ''}`, date, createdBy: userId
+  });
+  await from.save();
+  try {
+    await to.save();
+  } catch (err) {
+    // roll back the debit so money is never lost
+    from.balance += amt;
+    from.transactions.pop();
+    await from.save();
+    throw err;
+  }
+  return { from, to, amount: amt, reference: ref };
+};
+
 const getCashAccounts = async () => {
   await ensureDefaultAccounts();
+  await ensureOperatingAccount();
   const accounts = await CashAccount.find().sort({ name: 1 });
   return accounts;
 };
@@ -521,6 +571,7 @@ module.exports = {
   createCashAccount,
   updateCashAccount,
   adjustAccountBalance,
+  transferBetweenAccounts,
   getStockMovements,
   getFinanceOverview,
   getCostSettings,

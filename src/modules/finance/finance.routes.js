@@ -18,6 +18,7 @@ router.get(['/accounts/:id', '/cash-accounts/:id'], financeController.getAccount
 router.post(['/accounts', '/cash-accounts'], financeController.createAccount);
 router.put(['/accounts/:id', '/cash-accounts/:id'], financeController.updateAccount);
 router.patch(['/accounts/:id', '/cash-accounts/:id'], financeController.updateAccount);
+router.post(['/accounts/transfer', '/cash-accounts/transfer'], financeController.transfer);
 router.post(['/accounts/:id/adjust', '/cash-accounts/:id/adjust'], financeController.adjustBalance);
 
 router.get('/stock-movements', financeController.getMovements);

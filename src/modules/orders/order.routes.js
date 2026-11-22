@@ -23,6 +23,7 @@ router.post('/', optionalProtect, validate(createOrderSchema, 'Order.Create'), O
 
 // Customer protected routes
 router.get('/my-orders', protect, OrderController.getMyOrders);
+router.get('/ledger', protect, restrictTo('admin'), OrderController.getLedger);
 router.get('/:id', protect, OrderController.getOrderById);
 
 // Admin routes

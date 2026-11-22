@@ -23,6 +23,13 @@ class SettingsService {
         needsSave = true;
       }
 
+      // One-time: existing stores saved the old 0% default; apply the 2.4% gateway fee once
+      if (settings.payments?.fawaterk && !settings.payments.fawaterk.feeInitialized) {
+        settings.payments.fawaterk.feePercent = 2.4;
+        settings.payments.fawaterk.feeInitialized = true;
+        needsSave = true;
+      }
+
       if (needsSave) {
         await settings.save();
       }

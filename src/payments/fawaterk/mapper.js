@@ -21,6 +21,14 @@ const mapOrderToFawaterkInvoice = (order, customer) => {
     });
   }
 
+  if (order.metroPickupFee > 0) {
+    cartItems.push({ name: 'Metro Pickup Fee', price: order.metroPickupFee, quantity: 1 });
+  }
+
+  if (order.paymentFee > 0) {
+    cartItems.push({ name: 'Payment Gateway Fee', price: order.paymentFee, quantity: 1 });
+  }
+
   if (order.discount > 0) {
     cartItems.push({
       name: 'Discount Coupon',

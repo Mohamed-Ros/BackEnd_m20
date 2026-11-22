@@ -109,9 +109,11 @@ const settingsSchema = new mongoose.Schema(
         enabled: { type: Boolean, default: true },
         feeAmount: { type: Number, default: 0 }
       },
+      // Gateway fee charged on top of the order total (rounded to the nearest whole EGP)
       fawaterk: {
         enabled: { type: Boolean, default: true },
-        feePercent: { type: Number, default: 0 }
+        feePercent: { type: Number, default: 2.4 },
+        feeInitialized: { type: Boolean, default: false }
       }
     },
     // Automatic Product Cost Defaults
